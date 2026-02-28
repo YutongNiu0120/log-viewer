@@ -20,8 +20,13 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -29,6 +34,8 @@ import java.util.regex.Pattern;
 
 @Service
 public class RemoteCommandLogService {
+
+    private static final DateTimeFormatter FILE_DATE_FORMAT = DateTimeFormatter.BASIC_ISO_DATE;
 
     private final RemoteLogClient remoteLogClient;
     private final PathGuard pathGuard;
@@ -181,27 +188,13 @@ public class RemoteCommandLogService {
                                         String file,
                                         String date,
                                         boolean caseSensitive,
+                                        Integer contextLinesOverride,
                                         Integer maxHitsOverride) {
         if (isBlank(keyword)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_SEARCH", "keyword is required");
         }
         List<LogFileMeta> files = listLogFiles(server, projectPath, logType);
-        List<LogFileMeta> targetFiles = new ArrayList<LogFileMeta>();
-        if (scope == SearchScope.CURRENT_FILE) {
-            for (LogFileMeta meta : files) {
-                if (meta.getFileName().equals(file)) {
-                    targetFiles.add(meta);
-                }
-            }
-        } else if (scope == SearchScope.DAY) {
-            for (LogFileMeta meta : files) {
-                if (meta.getDate().equals(date)) {
-                    targetFiles.add(meta);
-                }
-            }
-        } else {
-            targetFiles.addAll(files);
-        }
+        List<LogFileMeta> targetFiles = selectTargetFiles(files, scope, file, date);
         if (targetFiles.isEmpty()) {
             return new SearchExecutionResult(false, 0, 0L, new ArrayList<SearchHit>());
         }
@@ -209,8 +202,10 @@ public class RemoteCommandLogService {
         int maxFiles = properties.getSearch().getMaxFilesPerSearch();
         long maxBytes = properties.getSearch().getMaxScannedBytesPerSearch();
         int defaultMaxHits = properties.getSearch().getMaxHitsPerSearch();
+        int maxContextLines = Math.max(0, properties.getSearch().getMaxContextLines());
         int desired = maxHitsOverride == null ? defaultMaxHits : maxHitsOverride.intValue();
         int maxHits = Math.max(1, Math.min(desired, defaultMaxHits));
+        int contextLines = contextLinesOverride == null ? 0 : Math.max(0, Math.min(contextLinesOverride.intValue(), maxContextLines));
 
         boolean partial = false;
         long scannedBytes = 0L;
@@ -228,7 +223,7 @@ public class RemoteCommandLogService {
                 partial = true;
                 break;
             }
-            SearchFileResult fileResult = grepFile(server, meta, keyword, caseSensitive, maxHits - hits.size());
+            SearchFileResult fileResult = grepFile(server, meta, keyword, caseSensitive, contextLines, maxHits - hits.size());
             scannedFiles++;
             scannedBytes += Math.max(meta.getSize(), 0L);
             hits.addAll(fileResult.hits());
@@ -238,6 +233,34 @@ public class RemoteCommandLogService {
             }
         }
         return new SearchExecutionResult(partial, scannedFiles, scannedBytes, hits);
+    }
+
+    private List<LogFileMeta> selectTargetFiles(List<LogFileMeta> files, SearchScope scope, String file, String date) {
+        List<LogFileMeta> targetFiles = new ArrayList<LogFileMeta>();
+        if (scope == SearchScope.CURRENT_FILE) {
+            for (LogFileMeta meta : files) {
+                if (meta.getFileName().equals(file)) {
+                    targetFiles.add(meta);
+                }
+            }
+            return targetFiles;
+        }
+        if (scope == SearchScope.DAY) {
+            for (LogFileMeta meta : files) {
+                if (meta.getDate().equals(date)) {
+                    targetFiles.add(meta);
+                }
+            }
+            return targetFiles;
+        }
+        if (scope == SearchScope.LAST_3_DAYS) {
+            return filterFilesByRecentDays(files, 3);
+        }
+        if (scope == SearchScope.LAST_7_DAYS) {
+            return filterFilesByRecentDays(files, 7);
+        }
+        targetFiles.addAll(files);
+        return targetFiles;
     }
 
     public LogFileMeta latestFileOrThrow(ServerConfig server, String projectPath, LogType logType) {
@@ -277,12 +300,13 @@ public class RemoteCommandLogService {
         return new ReadTextChunk(file, size, start, end, result.stdout());
     }
 
-    private SearchFileResult grepFile(ServerConfig server, LogFileMeta file, String keyword, boolean caseSensitive, int limit) {
+    private SearchFileResult grepFile(ServerConfig server, LogFileMeta file, String keyword, boolean caseSensitive, int contextLines, int limit) {
         String ci = caseSensitive ? "" : "-i ";
+        String ctx = contextLines > 0 ? "-C " + contextLines + " " : "";
         int bounded = Math.max(1, limit);
-        String rgCmd = "rg --no-heading --color never -H -n -b " + ci + "-F -m " + bounded + " -- "
+        String rgCmd = "rg --no-heading --color never -H -n -b " + ci + ctx + "-F -m " + bounded + " -- "
                 + ShellQuoter.sq(keyword) + " " + ShellQuoter.sq(file.getFullPath());
-        String grepCmd = "grep -nHb " + ci + "-F -m " + bounded + " -- "
+        String grepCmd = "grep -nHb " + ci + ctx + "-F -m " + bounded + " -- "
                 + ShellQuoter.sq(keyword) + " " + ShellQuoter.sq(file.getFullPath());
         String cmd = "if command -v rg >/dev/null 2>&1; then " + rgCmd + "; else " + grepCmd + "; fi";
         RemoteCommandResult result = remoteLogClient.exec(server, cmd, properties.getSearch().getTimeoutMs());
@@ -293,39 +317,109 @@ public class RemoteCommandLogService {
         Pattern pattern = caseSensitive
                 ? Pattern.compile(Pattern.quote(keyword))
                 : Pattern.compile(Pattern.quote(keyword), Pattern.CASE_INSENSITIVE);
+        String matchPrefix = file.getFullPath() + ":";
+        String contextPrefix = file.getFullPath() + "-";
+        Deque<String> rollingContext = new ArrayDeque<String>();
+        SearchHit currentHit = null;
         for (String line : splitLines(result.stdout())) {
             if (isBlank(line)) {
                 continue;
             }
-            String prefix = file.getFullPath() + ":";
-            if (!line.startsWith(prefix)) {
+            if ("--".equals(line)) {
+                rollingContext.clear();
+                currentHit = null;
                 continue;
             }
-            String body = line.substring(prefix.length());
-            int firstColon = body.indexOf(':');
-            if (firstColon < 0) {
+            if (line.startsWith(matchPrefix)) {
+                String body = line.substring(matchPrefix.length());
+                int firstColon = body.indexOf(':');
+                if (firstColon < 0) {
+                    continue;
+                }
+                int secondColon = body.indexOf(':', firstColon + 1);
+                if (secondColon < 0) {
+                    continue;
+                }
+                String lineNo = body.substring(0, firstColon);
+                String offset = body.substring(firstColon + 1, secondColon);
+                String text = body.substring(secondColon + 1);
+                SearchHit hit = new SearchHit();
+                hit.setFileName(file.getFileName());
+                hit.setDate(file.getDate());
+                hit.setLineNumber(parseLong(lineNo));
+                hit.setOffset(parseLong(offset));
+                hit.setLineText(text);
+                hit.setBeforeContext(new ArrayList<String>(rollingContext));
+                Matcher matcher = pattern.matcher(text);
+                while (matcher.find()) {
+                    hit.getMatchRanges().add(new int[]{matcher.start(), matcher.end()});
+                }
+                hits.add(hit);
+                rollingContext.clear();
+                currentHit = hit;
                 continue;
             }
-            int secondColon = body.indexOf(':', firstColon + 1);
-            if (secondColon < 0) {
+            if (!line.startsWith(contextPrefix)) {
                 continue;
             }
-            String lineNo = body.substring(0, firstColon);
-            String offset = body.substring(firstColon + 1, secondColon);
-            String text = body.substring(secondColon + 1);
-            SearchHit hit = new SearchHit();
-            hit.setFileName(file.getFileName());
-            hit.setDate(file.getDate());
-            hit.setLineNumber(parseLong(lineNo));
-            hit.setOffset(parseLong(offset));
-            hit.setLineText(text);
-            Matcher matcher = pattern.matcher(text);
-            while (matcher.find()) {
-                hit.getMatchRanges().add(new int[]{matcher.start(), matcher.end()});
+            String body = line.substring(contextPrefix.length());
+            int firstDash = body.indexOf('-');
+            if (firstDash < 0) {
+                continue;
             }
-            hits.add(hit);
+            int secondDash = body.indexOf('-', firstDash + 1);
+            if (secondDash < 0) {
+                continue;
+            }
+            String text = body.substring(secondDash + 1);
+            if (contextLines > 0) {
+                while (rollingContext.size() >= contextLines) {
+                    rollingContext.removeFirst();
+                }
+                rollingContext.addLast(text);
+                if (currentHit != null && currentHit.getAfterContext().size() < contextLines) {
+                    currentHit.getAfterContext().add(text);
+                }
+            }
         }
         return new SearchFileResult(false, hits);
+    }
+
+    private List<LogFileMeta> filterFilesByRecentDays(List<LogFileMeta> files, int days) {
+        List<LogFileMeta> targetFiles = new ArrayList<LogFileMeta>();
+        LocalDate newest = null;
+        for (LogFileMeta file : files) {
+            LocalDate parsed = parseFileDate(file.getDate());
+            if (parsed == null) {
+                continue;
+            }
+            if (newest == null || parsed.isAfter(newest)) {
+                newest = parsed;
+            }
+        }
+        if (newest == null) {
+            targetFiles.addAll(files);
+            return targetFiles;
+        }
+        LocalDate threshold = newest.minusDays(Math.max(0, days - 1));
+        for (LogFileMeta file : files) {
+            LocalDate parsed = parseFileDate(file.getDate());
+            if (parsed != null && !parsed.isBefore(threshold)) {
+                targetFiles.add(file);
+            }
+        }
+        return targetFiles;
+    }
+
+    private LocalDate parseFileDate(String value) {
+        if (isBlank(value)) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(value.trim(), FILE_DATE_FORMAT);
+        } catch (DateTimeParseException e) {
+            return null;
+        }
     }
 
     private long parseLong(String s) {

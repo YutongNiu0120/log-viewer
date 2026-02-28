@@ -9,6 +9,8 @@ public class SearchHit {
     private Long lineNumber;
     private Long offset;
     private String lineText;
+    private List<String> beforeContext = new ArrayList<>();
+    private List<String> afterContext = new ArrayList<>();
     private List<int[]> matchRanges = new ArrayList<>();
 
     public String getFileName() {
@@ -49,6 +51,22 @@ public class SearchHit {
 
     public void setLineText(String lineText) {
         this.lineText = lineText;
+    }
+
+    public List<String> getBeforeContext() {
+        return beforeContext;
+    }
+
+    public void setBeforeContext(List<String> beforeContext) {
+        this.beforeContext = beforeContext;
+    }
+
+    public List<String> getAfterContext() {
+        return afterContext;
+    }
+
+    public void setAfterContext(List<String> afterContext) {
+        this.afterContext = afterContext;
     }
 
     public List<int[]> getMatchRanges() {

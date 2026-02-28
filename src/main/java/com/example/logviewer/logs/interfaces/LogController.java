@@ -95,6 +95,7 @@ public class LogController {
                 request.getFile(),
                 request.getDate(),
                 request.isCaseSensitive(),
+                request.getContextLines(),
                 request.getMaxHits()
         );
         SearchResponse response = new SearchResponse();

@@ -9,6 +9,7 @@
   const LOG_FONT_SIZE_STEP = 1;
   const TAB_IDLE_PAUSE_MS = 30 * 60 * 1000;
   const TAB_IDLE_CHECK_MS = 60 * 1000;
+  const REALTIME_HIT_LIMIT = 120;
 
   const state = {
     bootstrap: null,
@@ -30,6 +31,7 @@
     nextTabSeq: 1,
     tabIdleTimer: null,
     searchHits: [],
+    realtimeHits: [],
     searchCollapsedGroups: {},
     starredProjectPaths: {},
     starredProjectOrder: [],
@@ -47,7 +49,9 @@
     searchCursor: -1,
     lastSearchKeyword: "",
     lastSearchScope: "",
+    lastHistorySearchSummary: "",
     logBuffer: "",
+    lastViewerScrollTop: 0,
     focusLineText: "",
     viewerHighlightKeyword: "",
     viewerHighlightCaseSensitive: false,
@@ -89,6 +93,7 @@
     logContent: $("logContent"),
     searchKeyword: $("searchKeyword"),
     searchScope: $("searchScope"),
+    searchContextLines: $("searchContextLines"),
     caseSensitive: $("caseSensitive"),
     searchBtn: $("searchBtn"),
     searchPrevBtn: $("searchPrevBtn"),
@@ -97,6 +102,7 @@
     searchConfirmHint: $("searchConfirmHint"),
     searchNavInfo: $("searchNavInfo"),
     searchSummary: $("searchSummary"),
+    searchLiveStatus: $("searchLiveStatus"),
     searchExpandAllBtn: $("searchExpandAllBtn"),
     searchCollapseAllBtn: $("searchCollapseAllBtn"),
     searchResults: $("searchResults"),
@@ -108,8 +114,10 @@
     reloadConfigBtn: $("reloadConfigBtn"),
     toastContainer: $("toastContainer"),
     filterDrawer: $("filterDrawer"),
+    drawerHead: document.querySelector(".drawer-head"),
     drawerToggleBtn: $("drawerToggleBtn"),
-    realtimeSwitch: $("realtimeSwitch")
+    realtimeSwitch: $("realtimeSwitch"),
+    searchPresetButtons: Array.from(document.querySelectorAll(".search-preset-btn[data-search-preset]"))
   };
 
   function setStatus(text, kind = "normal") {
@@ -191,6 +199,7 @@
       els.realtimeSwitch.checked = enabled;
       els.realtimeSwitch.disabled = !state.projectPath;
     }
+    renderSearchStatus();
   }
 
   function updateTabActionButtons() {
@@ -215,9 +224,15 @@
     if (els.openLatestBtn) els.openLatestBtn.disabled = !hasFiles;
     if (els.searchKeyword) els.searchKeyword.disabled = !hasProject;
     if (els.searchScope) els.searchScope.disabled = !hasProject;
+    if (els.searchContextLines) els.searchContextLines.disabled = !hasProject;
     if (els.caseSensitive) els.caseSensitive.disabled = !hasProject;
     if (els.searchBtn) els.searchBtn.disabled = !hasProject;
     if (els.searchResetBtn) els.searchResetBtn.disabled = !hasProject;
+    if (Array.isArray(els.searchPresetButtons)) {
+      els.searchPresetButtons.forEach((btn) => {
+        btn.disabled = !hasProject;
+      });
+    }
     updateSearchNavigationUI();
     updateTabActionButtons();
     updateModeUI();
@@ -276,14 +291,18 @@
       viewerHighlightKeyword: "",
       viewerHighlightCaseSensitive: false,
       searchHits: [],
+      realtimeHits: [],
       searchCollapsedGroups: {},
       searchCursor: -1,
       lastSearchKeyword: "",
       lastSearchScope: "",
+      lastHistorySearchSummary: "",
       searchKeywordInput: "",
       searchScopeValue: "currentFile",
+      searchContextLinesValue: "2",
       caseSensitiveValue: false,
       fileFilterInput: "",
+      nextRealtimeHitSeq: 1,
       ws: null,
       wsConnected: false,
       realtimeWanted: false,
@@ -333,12 +352,15 @@
     tab.viewerHighlightKeyword = state.viewerHighlightKeyword || "";
     tab.viewerHighlightCaseSensitive = !!state.viewerHighlightCaseSensitive;
     tab.searchHits = Array.isArray(state.searchHits) ? state.searchHits.slice() : [];
+    tab.realtimeHits = Array.isArray(state.realtimeHits) ? state.realtimeHits.slice() : [];
     tab.searchCollapsedGroups = { ...(state.searchCollapsedGroups || {}) };
     tab.searchCursor = state.searchCursor;
     tab.lastSearchKeyword = state.lastSearchKeyword || "";
     tab.lastSearchScope = state.lastSearchScope || "";
+    tab.lastHistorySearchSummary = state.lastHistorySearchSummary || "";
     tab.searchKeywordInput = els.searchKeyword ? els.searchKeyword.value : "";
     tab.searchScopeValue = els.searchScope ? els.searchScope.value : "currentFile";
+    tab.searchContextLinesValue = els.searchContextLines ? els.searchContextLines.value : "2";
     tab.caseSensitiveValue = !!(els.caseSensitive && els.caseSensitive.checked);
     tab.fileFilterInput = els.fileFilter ? els.fileFilter.value : "";
     tab.ws = state.ws || tab.ws || null;
@@ -364,14 +386,17 @@
     state.viewerHighlightKeyword = tab.viewerHighlightKeyword || "";
     state.viewerHighlightCaseSensitive = !!tab.viewerHighlightCaseSensitive;
     state.searchHits = Array.isArray(tab.searchHits) ? tab.searchHits.slice() : [];
+    state.realtimeHits = Array.isArray(tab.realtimeHits) ? tab.realtimeHits.slice() : [];
     state.searchCollapsedGroups = { ...(tab.searchCollapsedGroups || {}) };
     state.searchCursor = Number.isFinite(tab.searchCursor) ? tab.searchCursor : -1;
     state.lastSearchKeyword = tab.lastSearchKeyword || "";
     state.lastSearchScope = tab.lastSearchScope || "";
+    state.lastHistorySearchSummary = tab.lastHistorySearchSummary || "";
     state.ws = tab.ws || null;
     state.wsConnected = !!tab.wsConnected;
     if (els.searchKeyword) els.searchKeyword.value = tab.searchKeywordInput || "";
     if (els.searchScope) els.searchScope.value = tab.searchScopeValue || "currentFile";
+    if (els.searchContextLines) els.searchContextLines.value = tab.searchContextLinesValue || "2";
     if (els.caseSensitive) els.caseSensitive.checked = !!tab.caseSensitiveValue;
     if (els.fileFilter) els.fileFilter.value = tab.fileFilterInput || "";
     if (els.currentProjectLabel) els.currentProjectLabel.textContent = tab.projectPath || "-";
@@ -384,7 +409,8 @@
       updateFileMeta();
     }
     renderLogBuffer();
-    renderSearchResults(state.lastSearchKeyword || (els.searchKeyword ? els.searchKeyword.value.trim() : ""));
+    renderSearchResults(getSearchKeywordText());
+    renderSearchStatus();
     updateSearchNavigationUI();
     updateSearchGroupToolButtons();
     applyTabStatusToUI(tab);
@@ -580,6 +606,54 @@
     tab.logBuffer = trimTextBuffer(text + (tab.logBuffer || ""), false);
   }
 
+  function collectRealtimeHitsForTab(tab, lines, fileName) {
+    if (!tab || !tab.realtimeWanted || tab.pausedByIdle) return 0;
+    const keyword = (tab.searchKeywordInput || "").trim();
+    if (!keyword) return 0;
+    const caseSensitive = !!tab.caseSensitiveValue;
+    let re;
+    try {
+      re = new RegExp(escapeRegExp(keyword), caseSensitive ? "" : "i");
+    } catch (e) {
+      console.warn(e);
+      return 0;
+    }
+    const incoming = Array.isArray(lines) ? lines : [];
+    const nextHits = [];
+    for (const line of incoming) {
+      const text = String(line || "");
+      if (!re.test(text)) continue;
+      nextHits.push(normalizeSearchHit({
+        id: `rt-${tab.id}-${tab.nextRealtimeHitSeq++}`,
+        source: "realtime",
+        fileName: fileName || tab.currentFile || state.currentFile || "",
+        date: resolveFileDate(fileName || tab.currentFile || state.currentFile || "", tab.files),
+        lineNumber: null,
+        offset: null,
+        lineText: text,
+        beforeContext: [],
+        afterContext: [],
+        capturedAt: new Date().toISOString(),
+        keyword
+      }, "realtime"));
+    }
+    if (!nextHits.length) return 0;
+    tab.realtimeHits = trimRealtimeHits([...(tab.realtimeHits || []), ...nextHits]);
+    if (tab.id === state.activeTabId) {
+      state.realtimeHits = tab.realtimeHits.slice();
+      renderSearchStatus();
+      renderSearchResults(getSearchKeywordText());
+      updateSearchNavigationUI();
+      updateSearchGroupToolButtons();
+      if (!state.autoFollow) {
+        notify(`实时新增 ${nextHits.length} 条命中`, "info", 1800);
+      }
+    } else {
+      renderLogTabs();
+    }
+    return nextHits.length;
+  }
+
   function startTabIdleMonitor() {
     if (state.tabIdleTimer) return;
     state.tabIdleTimer = setInterval(() => {
@@ -749,6 +823,7 @@
       els.drawerToggleBtn.textContent = state.drawerCollapsed ? "‹" : "›";
       els.drawerToggleBtn.title = state.drawerCollapsed ? "展开筛选" : "折叠筛选";
       els.drawerToggleBtn.setAttribute("aria-label", els.drawerToggleBtn.title);
+      els.drawerToggleBtn.setAttribute("aria-expanded", state.drawerCollapsed ? "false" : "true");
     }
     persistFilterDrawerCollapsedPreference(state.drawerCollapsed);
   }
@@ -784,6 +859,115 @@
     return [];
   }
 
+  function getSearchKeywordText() {
+    return els.searchKeyword ? els.searchKeyword.value.trim() : "";
+  }
+
+  function getVisibleSearchHits() {
+    return [...(state.searchHits || []), ...(state.realtimeHits || [])];
+  }
+
+  function getRealtimeMonitorKeyword(tab = getActiveTab()) {
+    if (!tab || !tab.realtimeWanted || tab.pausedByIdle) return "";
+    if (tab.id === state.activeTabId && els.searchKeyword) {
+      return getSearchKeywordText();
+    }
+    return (tab.searchKeywordInput || "").trim();
+  }
+
+  function getRealtimeMonitorCaseSensitive(tab = getActiveTab()) {
+    if (!tab) return false;
+    if (tab.id === state.activeTabId && els.caseSensitive) {
+      return !!els.caseSensitive.checked;
+    }
+    return !!tab.caseSensitiveValue;
+  }
+
+  function getEffectiveViewerHighlightKeyword() {
+    return state.viewerHighlightKeyword || getRealtimeMonitorKeyword();
+  }
+
+  function getEffectiveViewerHighlightCaseSensitive() {
+    if (state.viewerHighlightKeyword) return !!state.viewerHighlightCaseSensitive;
+    return getRealtimeMonitorCaseSensitive();
+  }
+
+  function searchSourceLabel(hit) {
+    return hit && hit.source === "realtime" ? "实时命中" : "历史命中";
+  }
+
+  function normalizeSearchHit(hit, source = "history") {
+    return {
+      ...hit,
+      source,
+      beforeContext: Array.isArray(hit && hit.beforeContext) ? hit.beforeContext.slice() : [],
+      afterContext: Array.isArray(hit && hit.afterContext) ? hit.afterContext.slice() : [],
+      matchRanges: Array.isArray(hit && hit.matchRanges) ? hit.matchRanges.slice() : [],
+      capturedAt: hit && hit.capturedAt ? hit.capturedAt : null,
+      keyword: hit && hit.keyword ? hit.keyword : ""
+    };
+  }
+
+  function trimRealtimeHits(value) {
+    const list = Array.isArray(value) ? value : [];
+    if (list.length <= REALTIME_HIT_LIMIT) return list;
+    return list.slice(list.length - REALTIME_HIT_LIMIT);
+  }
+
+  function resolveFileDate(fileName, files = state.files) {
+    const matched = (files || []).find((item) => item && item.fileName === fileName);
+    if (matched && matched.date) return matched.date;
+    const raw = String(fileName || "");
+    const dateMatch = raw.match(/\.(\d{8})\.\d+\.log$/);
+    return dateMatch ? dateMatch[1] : "";
+  }
+
+  function renderSearchStatus() {
+    if (els.searchSummary) {
+      els.searchSummary.textContent = state.lastHistorySearchSummary || "";
+    }
+    if (!els.searchLiveStatus) return;
+    const keyword = getRealtimeMonitorKeyword();
+    if (!keyword) {
+      els.searchLiveStatus.textContent = state.realtimeHits.length ? `实时命中缓存 ${state.realtimeHits.length} 条` : "";
+      els.searchLiveStatus.className = "muted small";
+      return;
+    }
+    const count = state.realtimeHits.length;
+    els.searchLiveStatus.textContent = `实时监控 "${keyword}" | 新增命中 ${count} 条`;
+    els.searchLiveStatus.className = "muted small search-live-active";
+  }
+
+  function invalidateSearchResults() {
+    state.searchHits = [];
+    state.realtimeHits = [];
+    state.searchCollapsedGroups = {};
+    state.searchCursor = -1;
+    state.lastSearchKeyword = "";
+    state.lastSearchScope = "";
+    state.lastHistorySearchSummary = "";
+    state.focusLineText = "";
+    state.viewerHighlightKeyword = "";
+    state.viewerHighlightCaseSensitive = false;
+    state.pendingAllSearchConfirm = null;
+    clearSearchConfirmHint();
+    renderLogBuffer();
+    renderSearchStatus();
+    renderSearchResults(getSearchKeywordText());
+    updateSearchNavigationUI();
+    updateSearchGroupToolButtons();
+    syncStateToActiveTab();
+  }
+
+  function syncViewerHighlightWithMonitor() {
+    renderLogBuffer();
+    renderSearchStatus();
+    renderSearchResults(getSearchKeywordText());
+    updateSearchNavigationUI();
+    updateSearchGroupToolButtons();
+    syncStateToActiveTab();
+  }
+
   function resetSearchNavigation() {
     state.searchCursor = -1;
     updateSearchNavigationUI();
@@ -792,17 +976,24 @@
 
   function resetSearchPanel() {
     state.searchHits = [];
+    state.realtimeHits = [];
     state.searchCollapsedGroups = {};
     state.searchCursor = -1;
     state.lastSearchKeyword = "";
     state.lastSearchScope = "";
+    state.lastHistorySearchSummary = "";
+    state.focusLineText = "";
+    state.viewerHighlightKeyword = "";
+    state.viewerHighlightCaseSensitive = false;
     state.pendingAllSearchConfirm = null;
     if (els.searchKeyword) els.searchKeyword.value = "";
     if (els.searchScope) els.searchScope.value = "currentFile";
+    if (els.searchContextLines) els.searchContextLines.value = "2";
     if (els.caseSensitive) els.caseSensitive.checked = false;
-    if (els.searchSummary) els.searchSummary.textContent = "";
     if (els.searchResults) els.searchResults.innerHTML = `<div class="muted small">未搜索</div>`;
     clearSearchConfirmHint();
+    renderSearchStatus();
+    renderLogBuffer();
     updateSearchNavigationUI();
     updateSearchGroupToolButtons();
     syncStateToActiveTab();
@@ -885,12 +1076,13 @@
   }
 
   function updateSearchNavigationUI() {
-    const total = state.searchHits.length;
+    const total = getVisibleSearchHits().length;
     const hasHits = total > 0 && !!state.projectPath;
     els.searchPrevBtn.disabled = !hasHits;
     els.searchNextBtn.disabled = !hasHits;
     if (!hasHits) {
-      els.searchNavInfo.textContent = "未搜索";
+      const monitorKeyword = getRealtimeMonitorKeyword();
+      els.searchNavInfo.textContent = monitorKeyword ? "实时监控中，暂无命中" : "未搜索";
       return;
     }
     const current = state.searchCursor >= 0 ? state.searchCursor + 1 : 0;
@@ -901,10 +1093,16 @@
     const groups = [];
     const indexByFile = new Map();
     hits.forEach((hit, idx) => {
-      const key = hit.fileName || "(unknown)";
+      const source = hit && hit.source === "realtime" ? "realtime" : "history";
+      const key = `${source}@@${hit.fileName || "(unknown)"}@@${hit.date || ""}`;
       let group = indexByFile.get(key);
       if (!group) {
-        group = { fileName: key, date: hit.date, items: [] };
+        group = {
+          source,
+          fileName: (hit && hit.fileName) || "(unknown)",
+          date: hit && hit.date,
+          items: []
+        };
         indexByFile.set(key, group);
         groups.push(group);
       }
@@ -913,35 +1111,35 @@
     return groups;
   }
 
-  function searchGroupKey(fileName, date) {
-    return `${fileName || ""}@@${date || ""}`;
+  function searchGroupKey(source, fileName, date) {
+    return `${source || "history"}@@${fileName || ""}@@${date || ""}`;
   }
 
   function hitGroupKey(hit) {
-    return searchGroupKey(hit && hit.fileName, hit && hit.date);
+    return searchGroupKey(hit && hit.source, hit && hit.fileName, hit && hit.date);
   }
 
   function ensureSearchGroupState(groups) {
     const next = {};
     for (const group of groups) {
-      const key = searchGroupKey(group.fileName, group.date);
+      const key = searchGroupKey(group.source, group.fileName, group.date);
       next[key] = !!state.searchCollapsedGroups[key];
     }
     state.searchCollapsedGroups = next;
   }
 
   function setAllSearchGroupsCollapsed(collapsed) {
-    const groups = groupHitsByFile(state.searchHits || []);
+    const groups = groupHitsByFile(getVisibleSearchHits());
     const next = {};
     for (const group of groups) {
-      next[searchGroupKey(group.fileName, group.date)] = !!collapsed;
+      next[searchGroupKey(group.source, group.fileName, group.date)] = !!collapsed;
     }
     state.searchCollapsedGroups = next;
-    renderSearchResults(state.lastSearchKeyword);
+    renderSearchResults(getSearchKeywordText());
   }
 
   function updateSearchGroupToolButtons() {
-    const groups = groupHitsByFile(state.searchHits || []);
+    const groups = groupHitsByFile(getVisibleSearchHits());
     const disabled = groups.length === 0;
     if (els.searchExpandAllBtn) els.searchExpandAllBtn.disabled = disabled;
     if (els.searchCollapseAllBtn) els.searchCollapseAllBtn.disabled = disabled;
@@ -1581,10 +1779,12 @@
       if (tab.id === state.activeTabId) {
         state.currentFile = tab.currentFile || state.currentFile;
         if (msg.fileName) els.currentFileLabel.textContent = msg.fileName;
+        renderSearchStatus();
       }
       return;
     }
     if (msg.type === "file_switched") {
+      const shouldFollow = state.autoFollow;
       appendTextToTabBuffer(tab, `\n[system] 已切换文件: ${msg.fromFile} -> ${msg.toFile}\n`);
       tab.currentFile = msg.toFile || tab.currentFile;
       tab.lastRealtimeMode = "latest";
@@ -1593,10 +1793,13 @@
         els.currentFileLabel.textContent = tab.currentFile || "-";
         state.logBuffer = tab.logBuffer || "";
         renderLogBuffer();
-        if (state.autoFollow) {
+        renderSearchStatus();
+        if (shouldFollow) {
           scrollToBottom();
         } else {
+          state.lastViewerScrollTop = els.logViewer.scrollTop;
           els.backToBottomBtn.hidden = false;
+          syncStateToActiveTab();
         }
         // Refresh file list so latest marker/selection keeps up.
         loadFiles().catch(console.error);
@@ -1609,6 +1812,8 @@
       if (msg.fileName) {
         tab.currentFile = msg.fileName;
       }
+      const shouldFollow = state.autoFollow;
+      collectRealtimeHitsForTab(tab, msg.lines || [], tab.currentFile || msg.fileName);
       const text = (msg.lines || []).join("\n") + ((msg.lines || []).length ? "\n" : "");
       appendTextToTabBuffer(tab, text);
       if (tab.id === state.activeTabId) {
@@ -1616,10 +1821,13 @@
         if (msg.fileName) els.currentFileLabel.textContent = msg.fileName;
         state.logBuffer = tab.logBuffer || "";
         renderLogBuffer();
-        if (state.autoFollow) {
+        renderSearchStatus();
+        if (shouldFollow) {
           scrollToBottom();
         } else {
+          state.lastViewerScrollTop = els.logViewer.scrollTop;
           els.backToBottomBtn.hidden = false;
+          syncStateToActiveTab();
         }
         syncStateToActiveTab();
       } else {
@@ -1756,6 +1964,7 @@
       prependLogText(chunk.text || "");
       const nextHeight = els.logViewer.scrollHeight;
       els.logViewer.scrollTop = prevTop + (nextHeight - prevHeight);
+      state.lastViewerScrollTop = els.logViewer.scrollTop;
     } catch (e) {
       console.error(e);
     } finally {
@@ -1770,7 +1979,7 @@
       return;
     }
     if (!state.currentFileMeta && state.files.length) state.currentFileMeta = state.files[0];
-    const keyword = els.searchKeyword.value.trim();
+    const keyword = getSearchKeywordText();
     if (!keyword) {
       notify("请输入关键字", "warn");
       return;
@@ -1810,19 +2019,22 @@
       scope,
       date: fileMeta ? fileMeta.date : undefined,
       file,
-      caseSensitive: els.caseSensitive.checked
+      caseSensitive: els.caseSensitive.checked,
+      contextLines: els.searchContextLines ? Number(els.searchContextLines.value || 0) : 0
     };
     state.lastSearchKeyword = keyword;
     state.lastSearchScope = scope;
     resetSearchNavigation();
-    els.searchSummary.textContent = "搜索中...";
+    state.lastHistorySearchSummary = "搜索中...";
+    renderSearchStatus();
     const resp = await api("/api/logs/search", {
       method: "POST",
       body: JSON.stringify(body)
     });
-    state.searchHits = resp.hits || [];
+    state.searchHits = (resp.hits || []).map((hit) => normalizeSearchHit(hit, "history"));
     state.searchCollapsedGroups = {};
-    els.searchSummary.textContent = `命中 ${state.searchHits.length} 条 | 扫描文件 ${resp.scannedFiles} | 扫描字节 ${formatBytes(resp.scannedBytes || 0)}${resp.partial ? " | 结果已截断" : ""}`;
+    state.lastHistorySearchSummary = `历史命中 ${state.searchHits.length} 条 | 扫描文件 ${resp.scannedFiles} | 扫描字节 ${formatBytes(resp.scannedBytes || 0)}${resp.partial ? " | 结果已截断" : ""}`;
+    renderSearchStatus();
     renderSearchResults(keyword);
     updateSearchGroupToolButtons();
     updateSearchNavigationUI();
@@ -1834,16 +2046,21 @@
 
   function renderSearchResults(keyword) {
     els.searchResults.innerHTML = "";
-    if (!state.searchHits.length) {
-      els.searchResults.innerHTML = `<div class="muted small">没有匹配结果</div>`;
+    const hits = getVisibleSearchHits();
+    if (!hits.length) {
+      const monitorKeyword = getRealtimeMonitorKeyword();
+      const placeholder = monitorKeyword
+        ? "实时监控中，暂无命中"
+        : (state.lastSearchKeyword ? "没有匹配结果" : "未搜索");
+      els.searchResults.innerHTML = `<div class="muted small">${placeholder}</div>`;
       updateSearchGroupToolButtons();
       syncStateToActiveTab();
       return;
     }
-    const groups = groupHitsByFile(state.searchHits);
+    const groups = groupHitsByFile(hits);
     ensureSearchGroupState(groups);
     for (const group of groups) {
-      const key = searchGroupKey(group.fileName, group.date);
+      const key = searchGroupKey(group.source, group.fileName, group.date);
       const collapsed = !!state.searchCollapsedGroups[key];
       const groupBox = document.createElement("div");
       groupBox.className = "search-group" + (collapsed ? " collapsed" : "");
@@ -1853,11 +2070,12 @@
       head.className = "search-group-head";
       head.innerHTML = `
         <span class="search-group-arrow">${collapsed ? "▸" : "▾"}</span>
+        <span class="search-item-source ${group.source === "realtime" ? "realtime" : ""}">${searchSourceLabel(group)}</span>
         <span class="search-group-title-text">${escapeHtml(group.fileName)}${group.date ? `  [${escapeHtml(group.date)}]` : ""}  (${group.items.length})</span>
       `;
       head.addEventListener("click", () => {
         state.searchCollapsedGroups[key] = !state.searchCollapsedGroups[key];
-        renderSearchResults(state.lastSearchKeyword);
+        renderSearchResults(getSearchKeywordText());
       });
       const body = document.createElement("div");
       body.className = "search-group-body";
@@ -1867,13 +2085,33 @@
         const idx = entry.idx;
         const item = document.createElement("div");
         item.className = "search-item" + (state.searchCursor === idx ? " active" : "");
+        const meta = document.createElement("div");
+        meta.className = "search-item-meta";
+        const source = document.createElement("span");
+        source.className = "search-item-source" + (hit.source === "realtime" ? " realtime" : "");
+        source.textContent = hit.source === "realtime" ? "实时" : "历史";
         const title = document.createElement("div");
         title.className = "small muted";
-        title.textContent = `line ${hit.lineNumber == null ? "-" : hit.lineNumber}  offset ${hit.offset == null ? "-" : hit.offset}`;
+        const timeLabel = hit.capturedAt ? `  ${new Date(hit.capturedAt).toLocaleTimeString("zh-CN", { hour12: false })}` : "";
+        title.textContent = `line ${hit.lineNumber == null ? "-" : hit.lineNumber}  offset ${hit.offset == null ? "-" : hit.offset}${timeLabel}`;
+        meta.append(source, title);
+        const contextKeyword = hit.keyword || keyword || state.lastSearchKeyword || getSearchKeywordText();
+        for (const lineText of (hit.beforeContext || [])) {
+          const ctx = document.createElement("div");
+          ctx.className = "search-context before";
+          ctx.textContent = lineText;
+          item.appendChild(ctx);
+        }
         const line = document.createElement("div");
         line.className = "line";
-        line.innerHTML = highlightText(hit.lineText || "", keyword, els.caseSensitive.checked);
-        item.append(title, line);
+        line.innerHTML = highlightText(hit.lineText || "", contextKeyword, !!els.caseSensitive.checked);
+        item.append(meta, line);
+        for (const lineText of (hit.afterContext || [])) {
+          const ctx = document.createElement("div");
+          ctx.className = "search-context after";
+          ctx.textContent = lineText;
+          item.appendChild(ctx);
+        }
         item.addEventListener("click", () => openSearchHit(idx).catch(showError));
         body.appendChild(item);
       }
@@ -1885,12 +2123,13 @@
   }
 
   async function openSearchHit(index) {
-    if (index < 0 || index >= state.searchHits.length) return;
-    const hit = state.searchHits[index];
+    const hits = getVisibleSearchHits();
+    if (index < 0 || index >= hits.length) return;
+    const hit = hits[index];
     state.searchCollapsedGroups[hitGroupKey(hit)] = false;
     state.searchCursor = index;
     updateSearchNavigationUI();
-    renderSearchResults(state.lastSearchKeyword);
+    renderSearchResults(getSearchKeywordText());
     requestAnimationFrame(() => {
       const active = els.searchResults.querySelector(".search-item.active");
       if (active && typeof active.scrollIntoView === "function") {
@@ -1902,14 +2141,16 @@
       updateFileMeta();
     }
     state.focusLineText = hit.lineText || "";
-    state.viewerHighlightKeyword = state.lastSearchKeyword || "";
+    state.viewerHighlightKeyword = hit.keyword || state.lastSearchKeyword || getSearchKeywordText() || "";
     state.viewerHighlightCaseSensitive = !!els.caseSensitive.checked;
     if (hit.offset != null && !Number.isNaN(Number(hit.offset))) {
       await openFileAtOffset(hit.fileName, Number(hit.offset), hit.lineNumber);
     } else {
-      await openFile(hit.fileName, false);
+      if (state.currentFile !== hit.fileName) {
+        await openFileTailStatic(hit.fileName);
+      }
       state.focusLineText = hit.lineText || "";
-      state.viewerHighlightKeyword = state.lastSearchKeyword || "";
+      state.viewerHighlightKeyword = hit.keyword || state.lastSearchKeyword || getSearchKeywordText() || "";
       state.viewerHighlightCaseSensitive = !!els.caseSensitive.checked;
       renderLogBuffer();
       scrollFocusedLogLineIntoView();
@@ -1918,14 +2159,45 @@
   }
 
   async function moveSearchCursor(delta) {
-    if (!state.searchHits.length) return;
+    const hits = getVisibleSearchHits();
+    if (!hits.length) return;
     let next;
     if (state.searchCursor < 0) {
-      next = delta >= 0 ? 0 : state.searchHits.length - 1;
+      next = delta >= 0 ? 0 : hits.length - 1;
     } else {
-      next = (state.searchCursor + delta + state.searchHits.length) % state.searchHits.length;
+      next = (state.searchCursor + delta + hits.length) % hits.length;
     }
     await openSearchHit(next);
+  }
+
+  async function openFileTailStatic(fileName) {
+    if (!state.projectPath || !fileName) return;
+    const tab = getActiveTab();
+    const previousScrollLeft = els.logViewer ? els.logViewer.scrollLeft : 0;
+    closeRealtimeStream(true);
+    state.currentFile = fileName;
+    els.currentFileLabel.textContent = fileName;
+    const qs = new URLSearchParams({
+      serverId: state.serverId,
+      projectPath: state.projectPath,
+      file: fileName,
+      tailBytes: "65536"
+    });
+    const chunk = await api(`/api/logs/content/tail?${qs.toString()}`);
+    state.fileSize = (chunk && chunk.fileSize) || 0;
+    state.startOffset = (chunk && chunk.startOffset) || 0;
+    state.endOffset = (chunk && chunk.endOffset) || 0;
+    setLogText((chunk && chunk.text) || "");
+    if (els.logViewer) {
+      els.logViewer.scrollLeft = previousScrollLeft;
+    }
+    if (tab) {
+      tab.realtimeWanted = false;
+      tab.wsConnected = false;
+    }
+    setTabStatus(tab || getActiveTab(), "已切换为历史浏览");
+    updateModeUI();
+    syncStateToActiveTab();
   }
 
   async function openFileAtOffset(fileName, offset, lineNumber) {
@@ -1962,6 +2234,7 @@
     const ratio = Math.max(0, Math.min(1, (targetOffset - start) / total));
     const targetTop = Math.max(0, ratio * els.logViewer.scrollHeight - els.logViewer.clientHeight * 0.35);
     els.logViewer.scrollTop = targetTop;
+    state.lastViewerScrollTop = targetTop;
     state.autoFollow = false;
     els.backToBottomBtn.hidden = false;
   }
@@ -1972,6 +2245,7 @@
       if (!focused) return;
       const top = Math.max(0, focused.offsetTop - els.logViewer.clientHeight * 0.35);
       els.logViewer.scrollTop = top;
+      state.lastViewerScrollTop = top;
       state.autoFollow = false;
       els.backToBottomBtn.hidden = false;
     });
@@ -1987,6 +2261,12 @@
 
   function renderLogBuffer() {
     els.logContent.innerHTML = formatLogBufferHtml(state.logBuffer);
+    state.lastViewerScrollTop = els.logViewer.scrollTop;
+  }
+
+  function isViewerNearBottom(tolerance = 4) {
+    if (!els.logViewer) return true;
+    return els.logViewer.scrollTop + els.logViewer.clientHeight >= els.logViewer.scrollHeight - tolerance;
   }
 
   function formatLogBufferHtml(text) {
@@ -2039,10 +2319,10 @@
   }
 
   function applyViewerKeywordTokens(text) {
-    const keyword = state.viewerHighlightKeyword || "";
+    const keyword = getEffectiveViewerHighlightKeyword();
     if (!keyword) return text;
     try {
-      const flags = state.viewerHighlightCaseSensitive ? "g" : "gi";
+      const flags = getEffectiveViewerHighlightCaseSensitive() ? "g" : "gi";
       const re = new RegExp(escapeRegExp(keyword), flags);
       return String(text).replace(re, (m) => `<<#1#>>${m}<<#2#>>`);
     } catch (e) {
@@ -2102,19 +2382,34 @@
   }
 
   function scrollToBottom() {
-    els.logViewer.scrollTop = els.logViewer.scrollHeight;
+    const target = Math.max(0, els.logViewer.scrollHeight - els.logViewer.clientHeight);
+    els.logViewer.scrollTop = target;
+    state.lastViewerScrollTop = target;
+    requestAnimationFrame(() => {
+      if (!els.logViewer) return;
+      const settledTarget = Math.max(0, els.logViewer.scrollHeight - els.logViewer.clientHeight);
+      els.logViewer.scrollTop = settledTarget;
+      state.lastViewerScrollTop = settledTarget;
+      syncStateToActiveTab();
+    });
     state.autoFollow = true;
     els.backToBottomBtn.hidden = true;
     syncStateToActiveTab();
   }
 
   function onLogScroll() {
-    const nearBottom = els.logViewer.scrollTop + els.logViewer.clientHeight >= els.logViewer.scrollHeight - 24;
-    state.autoFollow = nearBottom;
-    els.backToBottomBtn.hidden = nearBottom;
+    const currentTop = els.logViewer.scrollTop;
+    const movingUp = currentTop < state.lastViewerScrollTop - 1;
+    if (movingUp) {
+      state.autoFollow = false;
+    } else if (isViewerNearBottom()) {
+      state.autoFollow = true;
+    }
+    state.lastViewerScrollTop = currentTop;
+    els.backToBottomBtn.hidden = state.autoFollow;
     syncStateToActiveTab();
     updateModeUI();
-    if (els.logViewer.scrollTop < 24) {
+    if (currentTop < 24) {
       loadPrevChunk();
     }
   }
@@ -2239,6 +2534,13 @@
         applyFilterDrawerCollapsed(!state.drawerCollapsed);
       });
     }
+    if (els.drawerHead) {
+      els.drawerHead.addEventListener("click", (event) => {
+        if (!state.drawerCollapsed) return;
+        if (event.target && event.target.closest && event.target.closest("button")) return;
+        applyFilterDrawerCollapsed(false);
+      });
+    }
     if (els.sidebarResizer && els.appBody) {
       let resizing = false;
       let startX = 0;
@@ -2283,21 +2585,44 @@
     els.searchPrevBtn.addEventListener("click", () => moveSearchCursor(-1).catch(showError));
     els.searchNextBtn.addEventListener("click", () => moveSearchCursor(1).catch(showError));
     els.searchScope.addEventListener("change", () => {
-      resetSearchNavigation();
-      state.pendingAllSearchConfirm = null;
-      clearSearchConfirmHint();
+      invalidateSearchResults();
     });
+    if (els.searchContextLines) {
+      els.searchContextLines.addEventListener("change", () => {
+        invalidateSearchResults();
+      });
+    }
+    if (els.caseSensitive) {
+      els.caseSensitive.addEventListener("change", () => {
+        invalidateSearchResults();
+        syncViewerHighlightWithMonitor();
+      });
+    }
     if (els.searchExpandAllBtn) {
       els.searchExpandAllBtn.addEventListener("click", () => setAllSearchGroupsCollapsed(false));
     }
     if (els.searchCollapseAllBtn) {
       els.searchCollapseAllBtn.addEventListener("click", () => setAllSearchGroupsCollapsed(true));
     }
+    if (Array.isArray(els.searchPresetButtons)) {
+      els.searchPresetButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          if (els.searchKeyword) els.searchKeyword.value = btn.dataset.searchPreset || "";
+          invalidateSearchResults();
+          syncViewerHighlightWithMonitor();
+          searchLogs().catch(showError);
+        });
+      });
+    }
     els.searchKeyword.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
         searchLogs().catch(showError);
       }
+    });
+    els.searchKeyword.addEventListener("input", () => {
+      invalidateSearchResults();
+      syncViewerHighlightWithMonitor();
     });
     if (els.logFontDownBtn) {
       els.logFontDownBtn.addEventListener("click", () => changeLogFontSize(-LOG_FONT_SIZE_STEP));

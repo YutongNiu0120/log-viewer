@@ -85,6 +85,7 @@ public class AppProperties {
         private int maxFilesPerSearch = 200;
         private long maxScannedBytesPerSearch = 20 * 1024 * 1024L;
         private int maxHitsPerSearch = 500;
+        private int maxContextLines = 5;
         private long timeoutMs = 15_000L;
 
         public int getMaxFilesPerSearch() {
@@ -109,6 +110,14 @@ public class AppProperties {
 
         public void setMaxHitsPerSearch(int maxHitsPerSearch) {
             this.maxHitsPerSearch = maxHitsPerSearch;
+        }
+
+        public int getMaxContextLines() {
+            return maxContextLines;
+        }
+
+        public void setMaxContextLines(int maxContextLines) {
+            this.maxContextLines = maxContextLines;
         }
 
         public long getTimeoutMs() {

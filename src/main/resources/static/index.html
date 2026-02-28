@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Log Viewer</title>
-  <link rel="stylesheet" href="/styles.css?v=20260228b">
+  <link rel="stylesheet" href="/styles.css?v=20260228f">
 </head>
 <body>
 <div class="app-shell">
@@ -92,8 +92,11 @@
 
     <aside id="filterDrawer" class="filter-drawer">
       <div class="drawer-head">
-        <div class="panel-title">筛选</div>
-        <button id="drawerToggleBtn" class="btn-icon btn-ghost" type="button" title="折叠筛选">›</button>
+        <div class="drawer-head-copy">
+          <div class="panel-title">筛选</div>
+          <div class="drawer-head-hint">文件与搜索</div>
+        </div>
+        <button id="drawerToggleBtn" class="btn-icon btn-ghost drawer-toggle-btn" type="button" title="折叠筛选" aria-label="折叠筛选" aria-expanded="true">›</button>
       </div>
       <div class="drawer-content">
         <div class="panel compact">
@@ -120,10 +123,18 @@
               大小写敏感
             </label>
           </div>
+          <div class="row row-wrap search-presets">
+            <button type="button" class="btn-ghost search-preset-btn" data-search-preset="ERROR">ERROR</button>
+            <button type="button" class="btn-ghost search-preset-btn" data-search-preset="Exception">Exception</button>
+            <button type="button" class="btn-ghost search-preset-btn" data-search-preset="timeout">timeout</button>
+            <button type="button" class="btn-ghost search-preset-btn" data-search-preset="OOM">OOM</button>
+          </div>
           <div class="row row-wrap search-row-second">
             <select id="searchScope">
               <option value="currentFile">当前文件</option>
               <option value="day">当天文件</option>
+              <option value="recent3d">近 3 天</option>
+              <option value="recent7d">近 7 天</option>
               <option value="all">全部日志文件</option>
             </select>
             <button id="searchPrevBtn" class="btn-icon btn-ghost" title="上一个命中" aria-label="上一个命中">↑</button>
@@ -134,6 +145,7 @@
           <div class="search-subtitle">命中导航</div>
           <div id="searchNavInfo" class="muted small">未搜索</div>
           <div id="searchSummary" class="muted small"></div>
+          <div id="searchLiveStatus" class="muted small"></div>
           <div class="row search-group-tools">
             <button id="searchExpandAllBtn" class="btn-ghost" type="button">展开全部</button>
             <button id="searchCollapseAllBtn" class="btn-ghost" type="button">折叠全部</button>
@@ -164,6 +176,6 @@
 
 <div id="toastContainer" class="toast-container"></div>
 
-<script src="/app.js?v=20260228b"></script>
+<script src="/app.js?v=20260228f"></script>
 </body>
 </html>

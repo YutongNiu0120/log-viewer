@@ -9,6 +9,7 @@ public class SearchRequest {
     private String date;
     private String file;
     private boolean caseSensitive;
+    private Integer contextLines;
     private Integer maxHits;
 
     public String getServerId() {
@@ -73,6 +74,14 @@ public class SearchRequest {
 
     public void setCaseSensitive(boolean caseSensitive) {
         this.caseSensitive = caseSensitive;
+    }
+
+    public Integer getContextLines() {
+        return contextLines;
+    }
+
+    public void setContextLines(Integer contextLines) {
+        this.contextLines = contextLines;
     }
 
     public Integer getMaxHits() {

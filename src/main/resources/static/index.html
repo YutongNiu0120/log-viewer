@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Log Viewer</title>
+  <link rel="stylesheet" href="/styles.css?v=20260228b">
+</head>
+<body>
+<div class="app-shell">
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="brand-inline">
+        <div class="brand-title">Log Viewer</div>
+        <div class="brand-sub">Read-Only Remote Logs</div>
+      </div>
+      <div class="topbar-controls">
+        <select id="serverSelect"></select>
+        <button id="refreshProjectsBtn" class="btn-info" title="刷新项目树">刷新项目</button>
+        <button id="testConnBtn" class="btn-secondary" title="测试连接">连通测试</button>
+        <button id="configBtn" class="btn-icon btn-ghost" title="服务器配置" aria-label="服务器配置">⚙</button>
+        <span id="statusPill" class="pill">未连接</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="context-line">
+        <span class="ctx-label">项目</span><span id="currentProjectLabel">-</span>
+        <span class="ctx-sep">/</span>
+        <span class="ctx-label">文件</span><span id="currentFileLabel">-</span>
+        <span class="ctx-sep">/</span>
+        <span class="ctx-label">类型</span><span id="currentLogTypeLabel">-</span>
+      </div>
+      <div id="serverMeta" class="muted small"></div>
+    </div>
+  </header>
+
+  <section id="appBody" class="app-body">
+    <aside class="sidebar">
+      <section class="panel">
+        <div class="panel-title">项目筛选</div>
+        <div class="row">
+          <select id="l1Filter">
+            <option value="">全部一级目录</option>
+          </select>
+        </div>
+        <input id="projectFilter" type="text" placeholder="按项目名过滤...">
+      </section>
+
+      <section class="panel panel-grow">
+        <div class="panel-title">项目树</div>
+        <div class="muted small">星标项目可拖拽排序</div>
+        <div id="projectTree" class="project-tree"></div>
+      </section>
+    </aside>
+
+    <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-label="调整左侧宽度" title="拖拽调整左侧宽度"></div>
+
+    <main class="main">
+      <div class="log-pane">
+        <div class="log-tabs-wrap">
+          <div class="log-tabs-head">
+            <div id="logTabs" class="log-tabs"></div>
+            <div class="log-tabs-actions">
+              <button id="closeRightTabsBtn" class="btn-ghost" type="button">关右侧</button>
+              <button id="closeOtherTabsBtn" class="btn-ghost" type="button">关其他</button>
+            </div>
+          </div>
+        </div>
+        <div class="log-toolbar">
+          <div class="log-toolbar-left">
+            <span id="modePill" class="pill mode-pill">未选择项目</span>
+            <label class="switch-inline" title="实时追踪开关">
+              <input id="realtimeSwitch" type="checkbox">
+              <span>实时</span>
+            </label>
+          </div>
+          <div class="log-toolbar-right">
+            <div class="font-stepper">
+              <span class="muted small">字号</span>
+              <button id="logFontDownBtn" type="button" title="减小字号">−</button>
+              <span id="logFontSizeLabel" class="muted small">12px</span>
+              <button id="logFontUpBtn" type="button" title="增大字号">+</button>
+            </div>
+            <button id="backToBottomBtn" class="btn-info" hidden>底部</button>
+          </div>
+        </div>
+        <div id="logViewer" class="log-viewer">
+          <div id="logContent"></div>
+        </div>
+      </div>
+    </main>
+
+    <aside id="filterDrawer" class="filter-drawer">
+      <div class="drawer-head">
+        <div class="panel-title">筛选</div>
+        <button id="drawerToggleBtn" class="btn-icon btn-ghost" type="button" title="折叠筛选">›</button>
+      </div>
+      <div class="drawer-content">
+        <div class="panel compact">
+          <div class="panel-title">日志文件</div>
+          <div class="row file-type-tabs" id="fileTypeTabs">
+            <button type="button" class="file-type-tab active" data-log-type="normal">业务日志</button>
+            <button type="button" class="file-type-tab" data-log-type="error">异常日志</button>
+          </div>
+          <input id="fileFilter" type="text" placeholder="过滤文件名（支持日期/关键字）">
+          <div class="row row-wrap">
+            <select id="fileSelect"></select>
+            <button id="openLatestBtn" class="btn-primary">最新日志</button>
+          </div>
+          <div id="fileMeta" class="muted small"></div>
+        </div>
+
+        <div class="panel compact search-panel">
+          <div class="panel-title">搜索</div>
+          <div class="row row-wrap search-row-top">
+            <input id="searchKeyword" type="text" placeholder="关键字...">
+            <button id="searchBtn" class="btn-icon btn-primary" title="搜索" aria-label="搜索">⌕</button>
+            <label class="checkbox">
+              <input id="caseSensitive" type="checkbox">
+              大小写敏感
+            </label>
+          </div>
+          <div class="row row-wrap search-row-second">
+            <select id="searchScope">
+              <option value="currentFile">当前文件</option>
+              <option value="day">当天文件</option>
+              <option value="all">全部日志文件</option>
+            </select>
+            <button id="searchPrevBtn" class="btn-icon btn-ghost" title="上一个命中" aria-label="上一个命中">↑</button>
+            <button id="searchNextBtn" class="btn-icon btn-ghost" title="下一个命中" aria-label="下一个命中">↓</button>
+            <button id="searchResetBtn" class="btn-ghost" type="button">重置</button>
+          </div>
+          <div id="searchConfirmHint" class="search-confirm-hint" hidden></div>
+          <div class="search-subtitle">命中导航</div>
+          <div id="searchNavInfo" class="muted small">未搜索</div>
+          <div id="searchSummary" class="muted small"></div>
+          <div class="row search-group-tools">
+            <button id="searchExpandAllBtn" class="btn-ghost" type="button">展开全部</button>
+            <button id="searchCollapseAllBtn" class="btn-ghost" type="button">折叠全部</button>
+          </div>
+          <div class="search-subtitle">结果列表</div>
+          <div id="searchResults" class="search-results"></div>
+        </div>
+      </div>
+    </aside>
+  </section>
+</div>
+
+<div id="configModal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-title">服务器配置</div>
+      <button id="closeConfigBtn" class="btn-icon btn-ghost" type="button" aria-label="关闭">×</button>
+    </div>
+    <p class="muted small">最小配置：name/host/port/username/password/rootPath。ID 由系统内部管理，默认服务自动取第一个。</p>
+    <div id="serverFormList" class="server-form-list"></div>
+    <div class="row row-wrap">
+      <button id="addServerFormBtn" class="btn-secondary">新增服务器</button>
+      <button id="saveConfigBtn" class="btn-primary">保存配置</button>
+      <button id="reloadConfigBtn" class="btn-ghost">重新加载</button>
+    </div>
+  </div>
+</div>
+
+<div id="toastContainer" class="toast-container"></div>
+
+<script src="/app.js?v=20260228b"></script>
+</body>
+</html>

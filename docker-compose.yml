@@ -1,0 +1,11 @@
+services:
+  log-viewer:
+    build: .
+    ports:
+      - "38180:38180"
+    environment:
+      APP_PORT: 38180
+      CONFIG_FILE: /app/app-data/servers.yaml
+      CONFIG_SECRET: change-me
+    volumes:
+      - ./app-data:/app/app-data

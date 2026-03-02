@@ -6,6 +6,7 @@ import java.util.List;
 public class SearchHit {
     private String fileName;
     private String date;
+    private String timestamp;
     private Long lineNumber;
     private Long offset;
     private String lineText;
@@ -27,6 +28,14 @@ public class SearchHit {
 
     public void setDate(String date) {
         this.date = date;
+    }
+
+    public String getTimestamp() {
+        return timestamp;
+    }
+
+    public void setTimestamp(String timestamp) {
+        this.timestamp = timestamp;
     }
 
     public Long getLineNumber() {

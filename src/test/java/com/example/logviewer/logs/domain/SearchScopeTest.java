@@ -10,6 +10,7 @@ class SearchScopeTest {
     void shouldParseRecentDayAliases() {
         assertThat(SearchScope.from("recent3d")).isEqualTo(SearchScope.LAST_3_DAYS);
         assertThat(SearchScope.from("last_7_days")).isEqualTo(SearchScope.LAST_7_DAYS);
+        assertThat(SearchScope.from("date_range")).isEqualTo(SearchScope.DATE_RANGE);
     }
 
     @Test

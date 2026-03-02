@@ -3,6 +3,7 @@ package com.example.logviewer.logs.domain;
 public enum SearchScope {
     CURRENT_FILE,
     DAY,
+    DATE_RANGE,
     LAST_3_DAYS,
     LAST_7_DAYS,
     ALL;
@@ -17,6 +18,9 @@ public enum SearchScope {
         }
         if ("day".equals(normalized)) {
             return DAY;
+        }
+        if ("daterange".equals(normalized) || "date_range".equals(normalized) || "range".equals(normalized)) {
+            return DATE_RANGE;
         }
         if ("last3days".equals(normalized) || "last_3_days".equals(normalized) || "recent3d".equals(normalized)) {
             return LAST_3_DAYS;

@@ -94,6 +94,8 @@ public class LogController {
                 request.getKeyword(),
                 request.getFile(),
                 request.getDate(),
+                request.getStartTime(),
+                request.getEndTime(),
                 request.isCaseSensitive(),
                 request.getContextLines(),
                 request.getMaxHits()

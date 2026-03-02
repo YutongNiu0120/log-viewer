@@ -7,6 +7,8 @@ public class SearchRequest {
     private String keyword;
     private String scope;
     private String date;
+    private String startTime;
+    private String endTime;
     private String file;
     private boolean caseSensitive;
     private Integer contextLines;
@@ -66,6 +68,22 @@ public class SearchRequest {
 
     public void setFile(String file) {
         this.file = file;
+    }
+
+    public String getStartTime() {
+        return startTime;
+    }
+
+    public void setStartTime(String startTime) {
+        this.startTime = startTime;
+    }
+
+    public String getEndTime() {
+        return endTime;
+    }
+
+    public void setEndTime(String endTime) {
+        this.endTime = endTime;
     }
 
     public boolean isCaseSensitive() {

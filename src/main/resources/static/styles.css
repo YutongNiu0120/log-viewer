@@ -1456,10 +1456,17 @@ body {
   gap: 6px;
   min-width: 0;
   font-size: 13px;
+  max-width: 100%;
 }
 
 .ctx-label {
   color: var(--muted);
+}
+
+.context-line #currentProjectLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ctx-sep {

@@ -94,6 +94,7 @@
     currentLogTypeLabel: $("currentLogTypeLabel"),
     modePill: $("modePill"),
     logTabs: $("logTabs"),
+    clearViewerBtn: $("clearViewerBtn"),
     logFontDownBtn: $("logFontDownBtn"),
     logFontResetBtn: $("logFontResetBtn"),
     logFontUpBtn: $("logFontUpBtn"),
@@ -261,6 +262,7 @@
     if (els.realtimeKeyword) els.realtimeKeyword.disabled = !hasProject;
     if (els.realtimeCaseSensitive) els.realtimeCaseSensitive.disabled = !hasProject;
     if (els.realtimeApplyBtn) els.realtimeApplyBtn.disabled = !hasProject;
+    if (els.clearViewerBtn) els.clearViewerBtn.disabled = !hasProject;
     if (Array.isArray(els.searchPresetButtons)) {
       els.searchPresetButtons.forEach((btn) => {
         btn.disabled = !hasProject;
@@ -1754,13 +1756,9 @@
   }
 
   function updateServerMeta() {
-    const bootstrapServers = (state.bootstrap && state.bootstrap.servers) ? state.bootstrap.servers : [];
-    const server = bootstrapServers.find(s => s.id === state.serverId);
-    if (!server) {
+    if (els.serverMeta) {
       els.serverMeta.textContent = "";
-      return;
     }
-    els.serverMeta.textContent = `${server.username}@${server.host}:${server.port} | Root Path = ${server.rootPath}`;
   }
 
   async function loadProjects() {
@@ -2882,6 +2880,7 @@
     state.startOffset = 0;
     state.endOffset = 0;
     state.fileSize = 0;
+    state.focusLineText = "";
     syncStateToActiveTab();
   }
 
@@ -3056,6 +3055,12 @@
     if (els.realtimeSwitch) {
       els.realtimeSwitch.addEventListener("change", () => {
         setRealtimeFollowEnabled(!!els.realtimeSwitch.checked).catch(showError);
+      });
+    }
+    if (els.clearViewerBtn) {
+      els.clearViewerBtn.addEventListener("click", () => {
+        clearViewer();
+        notify("已清空当前实时缓冲区", "info", 1600);
       });
     }
     if (els.drawerToggleBtn) {

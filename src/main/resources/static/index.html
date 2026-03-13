@@ -25,12 +25,11 @@
     <div class="topbar-right">
       <div class="context-line">
         <span class="ctx-label">项目</span><span id="currentProjectLabel">-</span>
-        <span class="ctx-sep">/</span>
-        <span class="ctx-label">文件</span><span id="currentFileLabel">-</span>
-        <span class="ctx-sep">/</span>
-        <span class="ctx-label">类型</span><span id="currentLogTypeLabel">-</span>
       </div>
-      <div id="serverMeta" class="muted small"></div>
+      <div hidden aria-hidden="true">
+        <span id="currentFileLabel">-</span>
+        <span id="currentLogTypeLabel">-</span>
+      </div>
     </div>
   </header>
 
@@ -73,6 +72,7 @@
               <input id="realtimeSwitch" type="checkbox">
               <span>实时</span>
             </label>
+            <button id="clearViewerBtn" class="btn-ghost" type="button">清屏</button>
           </div>
           <div class="log-toolbar-right">
             <div class="font-stepper">
@@ -219,6 +219,6 @@
 
 <div id="toastContainer" class="toast-container"></div>
 
-<script src="/app.js?v=20260302f"></script>
+<script src="/app.js?v=20260313a"></script>
 </body>
 </html>

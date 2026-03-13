@@ -54,3 +54,21 @@ When the user explicitly asks to "submit" or "提交代码", treat that as a req
 
 ## Security & Configuration Tips
 Do not commit `app-data/`, generated logs, or real credentials. Prefer environment variables such as `APP_PORT`, `CONFIG_FILE`, and `CONFIG_SECRET`. Preserve the product boundary: this repository is a read-only log viewer, not a remote shell.
+
+## 项目记忆
+以下区块由 Codex 维护，用于降低后续会话的仓库扫描成本。默认先读这里，再做大范围检索。
+
+- 入口：`.project-memory/README.md`
+- 项目摘要：`.project-memory/generated/project-summary.md`
+- 功能索引：`.project-memory/generated/feature-index.md`
+- 开发手册：`.project-memory/generated/development-playbook.md`
+- 当前关注：`.project-memory/memory/current.md`
+- 关键决策：`.project-memory/memory/decisions.md`
+- 里程碑：`.project-memory/memory/milestones.md`
+
+规则：
+
+- `.project-memory/generated/` 可由 Codex 初始化或刷新
+- `.project-memory/memory/` 为人工/长期记忆，不应在刷新时覆盖
+- 仅当仓库存在 `AGENTS.md` 时才维护 `.project-memory`
+- 该区块及新增项目记忆文档默认使用中文，代码标识与路径保持原文

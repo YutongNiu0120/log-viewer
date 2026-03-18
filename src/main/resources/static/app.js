@@ -551,11 +551,13 @@
     if (els.serverSelect && target.serverId && els.serverSelect.value !== target.serverId) {
       els.serverSelect.value = target.serverId;
       state.serverId = target.serverId;
+      persistSelectedServerId(state.serverId);
       reloadStarredProjectState(state.serverId);
       updateServerMeta();
       await loadProjects();
     } else {
       state.serverId = target.serverId || state.serverId;
+      persistSelectedServerId(state.serverId);
       if (state.serverId !== previousServerId) {
         reloadStarredProjectState(state.serverId);
       }
@@ -622,6 +624,7 @@
     const [tab] = state.tabs.splice(idx, 1);
     shutdownTabSocket(tab, false);
     if (state.activeTabId === tabId) {
+      const previousServerId = state.serverId;
       if (!state.tabs.length) {
         const next = createEmptyTab();
         next.serverId = state.serverId;
@@ -629,7 +632,18 @@
       }
       state.activeTabId = state.tabs[Math.max(0, idx - 1)] ? state.tabs[Math.max(0, idx - 1)].id : state.tabs[0].id;
       const active = getActiveTab();
-      if (active) loadStateFromTab(active);
+      if (active) {
+        loadStateFromTab(active);
+        if (els.serverSelect && state.serverId && els.serverSelect.value !== state.serverId) {
+          els.serverSelect.value = state.serverId;
+        }
+        persistSelectedServerId(state.serverId);
+        if (state.serverId !== previousServerId) {
+          reloadStarredProjectState(state.serverId);
+          updateServerMeta();
+          loadProjects().then(() => renderProjectTree()).catch(showError);
+        }
+      }
       renderProjectTree();
     }
     renderLogTabs();
@@ -917,6 +931,19 @@
     } catch (e) {
       console.warn(e);
     }
+  }
+
+  function pickAvailableServerId(servers, candidates) {
+    if (!Array.isArray(servers) || !servers.length || !Array.isArray(candidates)) {
+      return null;
+    }
+    for (const candidate of candidates) {
+      const normalized = candidate ? String(candidate).trim() : "";
+      if (normalized && servers.some((server) => server && server.id === normalized)) {
+        return normalized;
+      }
+    }
+    return null;
   }
 
   function applySidebarWidth(px) {
@@ -1755,6 +1782,9 @@
   function renderServerSelect() {
     const bootstrapServers = (state.bootstrap && state.bootstrap.servers) ? state.bootstrap.servers : [];
     const servers = bootstrapServers.slice();
+    const currentServerId = (state.serverId ? String(state.serverId).trim() : "")
+      || (els.serverSelect && els.serverSelect.value ? String(els.serverSelect.value).trim() : "")
+      || null;
     els.serverSelect.innerHTML = "";
     for (const s of servers) {
       const option = document.createElement("option");
@@ -1762,12 +1792,12 @@
       option.textContent = `${s.name || s.id} (${s.host})`;
       els.serverSelect.appendChild(option);
     }
-    const persistedServerId = loadPersistedServerId();
-    const hasPersistedServer = persistedServerId && servers.some((s) => s.id === persistedServerId);
-    state.serverId = (hasPersistedServer ? persistedServerId : null)
-      || (state.bootstrap && state.bootstrap.defaultServerId)
-      || (servers[0] ? servers[0].id : null)
-      || null;
+    state.serverId = pickAvailableServerId(servers, [
+      currentServerId,
+      loadPersistedServerId(),
+      state.bootstrap && state.bootstrap.defaultServerId,
+      servers[0] ? servers[0].id : null
+    ]);
     if (state.serverId) {
       els.serverSelect.value = state.serverId;
       persistSelectedServerId(state.serverId);

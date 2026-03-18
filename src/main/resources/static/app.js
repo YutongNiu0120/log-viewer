@@ -5,6 +5,7 @@
   const LOG_FONT_SIZE_KEY = "logViewer.fontSizePx";
   const FILTER_DRAWER_COLLAPSED_KEY = "logViewer.filterDrawerCollapsed";
   const SIDEBAR_WIDTH_KEY = "logViewer.sidebarWidthPx";
+  const SELECTED_SERVER_ID_KEY = "logViewer.selectedServerId";
   const LOG_FONT_SIZE_DEFAULT = 12;
   const LOG_FONT_SIZE_MIN = 10;
   const LOG_FONT_SIZE_MAX = 22;
@@ -208,10 +209,7 @@
       return { text: "实时已暂停", cls: "warn", canResume: true, resumeToBottom: false };
     }
     if (tab.realtimeWanted && tab.wsConnected) {
-      if (state.autoFollow) {
-        return { text: "实时追踪", cls: "live", canResume: false, resumeToBottom: false };
-      }
-      return { text: "实时追踪（脱离底部）", cls: "live", canResume: true, resumeToBottom: true };
+      return { text: "实时追踪", cls: "live", canResume: !state.autoFollow, resumeToBottom: !state.autoFollow };
     }
     if (tab.realtimeWanted && !tab.wsConnected) {
       return { text: "实时重连中", cls: "warn", canResume: true, resumeToBottom: false };
@@ -894,6 +892,28 @@
   function persistSidebarWidthPreference(px) {
     try {
       localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clampSidebarWidth(px)));
+    } catch (e) {
+      console.warn(e);
+    }
+  }
+
+  function loadPersistedServerId() {
+    try {
+      const raw = localStorage.getItem(SELECTED_SERVER_ID_KEY);
+      return raw ? String(raw).trim() || null : null;
+    } catch (e) {
+      console.warn(e);
+      return null;
+    }
+  }
+
+  function persistSelectedServerId(serverId) {
+    try {
+      if (serverId) {
+        localStorage.setItem(SELECTED_SERVER_ID_KEY, String(serverId));
+      } else {
+        localStorage.removeItem(SELECTED_SERVER_ID_KEY);
+      }
     } catch (e) {
       console.warn(e);
     }
@@ -1742,12 +1762,19 @@
       option.textContent = `${s.name || s.id} (${s.host})`;
       els.serverSelect.appendChild(option);
     }
-    state.serverId = (state.bootstrap && state.bootstrap.defaultServerId) || (servers[0] ? servers[0].id : null) || null;
+    const persistedServerId = loadPersistedServerId();
+    const hasPersistedServer = persistedServerId && servers.some((s) => s.id === persistedServerId);
+    state.serverId = (hasPersistedServer ? persistedServerId : null)
+      || (state.bootstrap && state.bootstrap.defaultServerId)
+      || (servers[0] ? servers[0].id : null)
+      || null;
     if (state.serverId) {
       els.serverSelect.value = state.serverId;
+      persistSelectedServerId(state.serverId);
       reloadStarredProjectState(state.serverId);
       updateServerMeta();
     } else {
+      persistSelectedServerId(null);
       reloadStarredProjectState(null);
     }
     syncStateToActiveTab();
@@ -2965,6 +2992,7 @@
       state.tabs = [];
       state.activeTabId = null;
       state.serverId = nextServerId;
+      persistSelectedServerId(state.serverId);
       reloadStarredProjectState(state.serverId);
       state.l1FilterInitialized = false;
       updateServerMeta();

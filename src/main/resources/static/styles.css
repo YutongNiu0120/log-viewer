@@ -1656,6 +1656,12 @@ body.resizing-sidebar {
   font-size: 12px;
 }
 
+.log-toolbar-left button {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+}
+
 .switch-inline input {
   width: 14px;
   height: 14px;

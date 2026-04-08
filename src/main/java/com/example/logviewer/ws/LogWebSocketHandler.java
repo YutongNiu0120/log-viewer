@@ -67,6 +67,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
         }
 
         if ("ping".equals(type)) {
+            logFollowService.markSessionHeartbeat(session.getId());
             logFollowService.sendMessage(session, map("type", "pong"));
             return;
         }

@@ -54,6 +54,8 @@ public class AppProperties {
     public static class Realtime {
         private long rotationCheckIntervalMs = 5000L;
         private long rotationCheckIdleThresholdMs = 5000L;
+        private long staleStreamCheckIntervalMs = 30000L;
+        private long staleStreamTimeoutMs = 120000L;
         private int initialTailLines = 200;
 
         public long getRotationCheckIntervalMs() {
@@ -78,6 +80,22 @@ public class AppProperties {
 
         public void setRotationCheckIdleThresholdMs(long rotationCheckIdleThresholdMs) {
             this.rotationCheckIdleThresholdMs = rotationCheckIdleThresholdMs;
+        }
+
+        public long getStaleStreamCheckIntervalMs() {
+            return staleStreamCheckIntervalMs;
+        }
+
+        public void setStaleStreamCheckIntervalMs(long staleStreamCheckIntervalMs) {
+            this.staleStreamCheckIntervalMs = staleStreamCheckIntervalMs;
+        }
+
+        public long getStaleStreamTimeoutMs() {
+            return staleStreamTimeoutMs;
+        }
+
+        public void setStaleStreamTimeoutMs(long staleStreamTimeoutMs) {
+            this.staleStreamTimeoutMs = staleStreamTimeoutMs;
         }
     }
 

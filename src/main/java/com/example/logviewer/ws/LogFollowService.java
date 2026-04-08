@@ -80,6 +80,13 @@ public class LogFollowService {
         }
     }
 
+    public void markSessionHeartbeat(String wsSessionId) {
+        ActiveStream active = activeStreams.get(wsSessionId);
+        if (active != null) {
+            active.touchHeartbeat();
+        }
+    }
+
     @PreDestroy
     public void shutdown() {
         for (ActiveStream stream : activeStreams.values()) {
@@ -126,6 +133,7 @@ public class LogFollowService {
 
         startTail(active, false);
         scheduleRotationCheck(active);
+        scheduleStaleStreamCleanup(active, ws.getId());
         sendStatus(ws, "following", map("fileName", target.getFileName(), "streamId", active.streamId));
     }
 
@@ -252,6 +260,27 @@ public class LogFollowService {
             }
         }, interval, interval, TimeUnit.MILLISECONDS);
         active.rotationTask = future;
+    }
+
+    private void scheduleStaleStreamCleanup(final ActiveStream active, final String wsSessionId) {
+        final long interval = Math.max(5_000L, appProperties.getRealtime().getStaleStreamCheckIntervalMs());
+        final long timeoutMs = Math.max(interval, appProperties.getRealtime().getStaleStreamTimeoutMs());
+        ScheduledFuture<?> future = scheduler.scheduleAtFixedRate(new Runnable() {
+            @Override
+            public void run() {
+                if (active.closed) {
+                    return;
+                }
+                long idleMs = System.currentTimeMillis() - active.lastHeartbeatAtEpochMs;
+                if (idleMs < timeoutMs) {
+                    return;
+                }
+                log.info("closing stale realtime stream {} for ws session {} after {} ms without heartbeat",
+                        active.streamId, wsSessionId, idleMs);
+                closeSessionStream(wsSessionId);
+            }
+        }, interval, interval, TimeUnit.MILLISECONDS);
+        active.staleCleanupTask = future;
     }
 
     private boolean sameLogicalFile(LogFileMeta a, LogFileMeta b) {
@@ -397,8 +426,10 @@ public class LogFollowService {
         volatile LogFileMeta currentFile;
         volatile TailStreamHandle tailHandle;
         volatile ScheduledFuture<?> rotationTask;
+        volatile ScheduledFuture<?> staleCleanupTask;
         volatile boolean closed;
         volatile long lastDataAtEpochMs = System.currentTimeMillis();
+        volatile long lastHeartbeatAtEpochMs = System.currentTimeMillis();
 
         private ActiveStream(String streamId, WebSocketSession ws, ServerConfig server, String projectPath, LogType logType, LogFileMeta currentFile) {
             this.streamId = streamId;
@@ -415,9 +446,16 @@ public class LogFollowService {
             if (rotationTask != null) {
                 rotationTask.cancel(true);
             }
+            if (staleCleanupTask != null) {
+                staleCleanupTask.cancel(true);
+            }
             if (tailHandle != null) {
                 tailHandle.close();
             }
+        }
+
+        private void touchHeartbeat() {
+            lastHeartbeatAtEpochMs = System.currentTimeMillis();
         }
     }
 }

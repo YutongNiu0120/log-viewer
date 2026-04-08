@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Log Viewer</title>
-  <link rel="stylesheet" href="/styles.css?v=20260302g">
+  <link rel="stylesheet" href="/styles.css?v=20260320a">
 </head>
 <body>
 <div class="app-shell">
@@ -93,107 +93,156 @@
     <aside id="filterDrawer" class="filter-drawer">
       <div class="drawer-head">
         <div class="drawer-head-copy">
-          <div class="panel-title">筛选</div>
-          <div class="drawer-head-hint">文件与搜索</div>
+          <div class="panel-title">日志搜索</div>
+          <div class="drawer-head-hint">输入条件后查看结果</div>
         </div>
         <button id="drawerToggleBtn" class="btn-icon btn-ghost drawer-toggle-btn" type="button" title="折叠筛选" aria-label="折叠筛选" aria-expanded="true">›</button>
       </div>
       <div class="drawer-content">
-        <div class="panel compact">
-          <div class="panel-title">日志文件</div>
-          <div class="row file-type-tabs" id="fileTypeTabs">
-            <button type="button" class="file-type-tab active" data-log-type="normal">业务日志</button>
-            <button type="button" class="file-type-tab" data-log-type="error">异常日志</button>
-          </div>
-          <input id="fileFilter" type="text" placeholder="过滤文件名（支持日期/关键字）">
-          <div class="row row-wrap">
-            <select id="fileSelect"></select>
-            <button id="openLatestBtn" class="btn-primary">最新日志</button>
-          </div>
-          <div id="fileMeta" class="muted small"></div>
-        </div>
-
-        <div class="panel compact search-panel">
-          <div class="panel-title">搜索</div>
-          <div class="row search-mode-tabs" id="searchModeTabs">
-            <button type="button" class="search-mode-tab active" data-search-panel="history">历史搜索</button>
-            <button type="button" class="search-mode-tab" data-search-panel="realtime">实时监控</button>
-          </div>
-
-          <section id="historySearchPanel" class="search-mode-panel">
-            <div class="row row-wrap search-row-top">
-              <input id="searchKeyword" type="text" placeholder="历史关键字...">
-              <button id="searchBtn" class="btn-icon btn-primary" title="搜索历史" aria-label="搜索历史">⌕</button>
-              <label class="checkbox">
-                <input id="caseSensitive" type="checkbox">
-                大小写敏感
-              </label>
+        <div class="search-panel">
+          <section class="drawer-group">
+            <div class="drawer-group-title"><span>日志来源</span></div>
+            <div class="drawer-field">
+              <div class="field-label inline-label">日志类型：</div>
+              <div class="row file-type-tabs" id="fileTypeTabs">
+                <button type="button" class="file-type-tab active" data-log-type="normal">业务日志</button>
+                <button type="button" class="file-type-tab" data-log-type="error">异常日志</button>
+              </div>
             </div>
-            <div class="row row-wrap search-presets">
-              <button type="button" class="btn-ghost search-preset-btn" data-search-preset="ERROR">ERROR</button>
-              <button type="button" class="btn-ghost search-preset-btn" data-search-preset="Exception">Exception</button>
-              <button type="button" class="btn-ghost search-preset-btn" data-search-preset="timeout">timeout</button>
-              <button type="button" class="btn-ghost search-preset-btn" data-search-preset="OOM">OOM</button>
+            <div class="drawer-field">
+              <div class="field-label inline-label">日志文件：</div>
+              <div class="row row-wrap source-file-row">
+                <select id="fileSelect"></select>
+                <button id="openLatestBtn" class="btn-secondary" type="button">最新</button>
+              </div>
+              <input id="fileFilter" type="text" placeholder="文件名过滤">
             </div>
-            <div id="searchDateRangeRow" class="row row-wrap search-date-range-row">
-              <label class="search-date-field">
-                <span class="muted small">起始时间</span>
-                <input id="searchDateStart" type="time" step="1">
-              </label>
-              <label class="search-date-field">
-                <span class="muted small">结束时间</span>
-                <input id="searchDateEnd" type="time" step="1">
-              </label>
-              <button id="searchDateCurrentBtn" class="btn-ghost search-date-current-btn" type="button">清空</button>
-            </div>
-            <div id="searchDateRangeHint" class="muted small search-date-range-hint"></div>
-            <div class="row row-wrap search-row-second">
-              <select id="searchScope">
-                <option value="currentFile">当前文件</option>
-                <option value="day">当天文件</option>
-                <option value="recent3d">近 3 天</option>
-                <option value="recent7d">近 7 天</option>
-                <option value="all">全部日志文件</option>
-              </select>
-              <button id="searchPrevBtn" class="btn-icon btn-ghost" title="上一个命中" aria-label="上一个命中">↑</button>
-              <button id="searchNextBtn" class="btn-icon btn-ghost" title="下一个命中" aria-label="下一个命中">↓</button>
-              <button id="searchResetBtn" class="btn-ghost" type="button">重置</button>
-            </div>
-            <div id="searchConfirmHint" class="search-confirm-hint" hidden></div>
-            <div id="historySearchDirtyHint" class="search-draft-hint" hidden></div>
-            <div class="search-subtitle">命中导航</div>
-            <div id="searchNavInfo" class="muted small">未搜索</div>
-            <div id="searchSummary" class="muted small"></div>
-            <div class="row search-group-tools">
-              <button id="searchExpandAllBtn" class="btn-ghost" type="button">展开全部</button>
-              <button id="searchCollapseAllBtn" class="btn-ghost" type="button">折叠全部</button>
-            </div>
-            <div class="search-subtitle">结果列表</div>
-            <div id="searchResults" class="search-results"></div>
+            <div id="fileMeta" class="muted small"></div>
           </section>
 
-          <section id="realtimeSearchPanel" class="search-mode-panel" hidden>
-            <div class="row row-wrap search-row-top">
-              <input id="realtimeKeyword" type="text" placeholder="实时监控关键字...">
-              <button id="realtimeApplyBtn" class="btn-primary" type="button">开始监控</button>
-              <button id="realtimeStopBtn" class="btn-ghost" type="button">停止监控</button>
+          <section class="drawer-group">
+            <div class="drawer-group-title"><span>搜索条件</span></div>
+            <div class="drawer-field drawer-field-inline">
+              <div class="field-label inline-label">搜索模式：</div>
+              <div class="row row-wrap search-mode-tabs" id="searchModeTabs" role="radiogroup" aria-label="搜索模式">
+                <button type="button" class="search-mode-tab active" data-search-panel="history" role="radio" aria-checked="true">
+                  <span class="choice-indicator" aria-hidden="true"></span>
+                  <span>历史搜索</span>
+                </button>
+                <button type="button" class="search-mode-tab" data-search-panel="realtime" role="radio" aria-checked="false">
+                  <span class="choice-indicator" aria-hidden="true"></span>
+                  <span>实时监控</span>
+                </button>
+              </div>
             </div>
-            <div class="row row-wrap search-row-second">
-              <label class="checkbox">
-                <input id="realtimeCaseSensitive" type="checkbox">
-                大小写敏感
-              </label>
-              <button id="realtimePrevBtn" class="btn-icon btn-ghost" title="上一个实时命中" aria-label="上一个实时命中">↑</button>
-              <button id="realtimeNextBtn" class="btn-icon btn-ghost" title="下一个实时命中" aria-label="下一个实时命中">↓</button>
-              <button id="realtimeClearBtn" class="btn-ghost" type="button">清空命中</button>
-            </div>
-            <div id="realtimeSearchStatus" class="muted small"></div>
-            <div id="realtimeSearchHint" class="search-draft-hint" hidden></div>
-            <div class="search-subtitle">命中导航</div>
-            <div id="realtimeSearchNavInfo" class="muted small">未开始监控</div>
-            <div class="muted small">实时命中只看新到日志；点击命中可定位到当前缓冲或切进历史查看。</div>
-            <div class="search-subtitle">结果列表</div>
-            <div id="realtimeSearchResults" class="search-results"></div>
+
+            <section id="historySearchPanel" class="search-mode-panel">
+              <div class="drawer-field">
+                <div class="field-label">关键词</div>
+                <div class="row search-input-row">
+                  <input id="searchKeyword" type="text" placeholder="输入关键词">
+                  <button id="searchBtn" class="btn-primary search-submit-btn" title="搜索历史" aria-label="搜索历史">搜索</button>
+                </div>
+              </div>
+              <div class="drawer-field drawer-field-inline drawer-field-compact">
+                <div class="field-label inline-label">快捷关键词：</div>
+                <div class="row row-wrap search-presets">
+                  <button type="button" class="btn-ghost search-preset-btn" data-search-preset="ERROR">ERROR</button>
+                  <button type="button" class="btn-ghost search-preset-btn" data-search-preset="Exception">Exception</button>
+                  <button type="button" class="btn-ghost search-preset-btn" data-search-preset="timeout">timeout</button>
+                  <button type="button" class="btn-ghost search-preset-btn" data-search-preset="OOM">OOM</button>
+                </div>
+              </div>
+              <div class="drawer-field">
+                <div class="field-label">时间范围：</div>
+                <div id="searchDateRangeRow" class="row row-wrap search-date-range-row">
+                  <input id="searchDateStart" class="search-date-input" type="time" step="1" aria-label="开始时间">
+                  <span class="search-date-separator" aria-hidden="true">至</span>
+                  <input id="searchDateEnd" class="search-date-input" type="time" step="1" aria-label="结束时间">
+                  <button id="searchDateCurrentBtn" class="btn-secondary search-date-current-btn" type="button">清空</button>
+                </div>
+                <div id="searchDateRangeHint" class="muted small search-date-range-hint" hidden></div>
+              </div>
+              <div class="drawer-field drawer-field-inline">
+                <div class="field-label inline-label">搜索范围：</div>
+                <div class="row row-wrap search-scope-options" role="radiogroup" aria-label="搜索范围">
+                  <button type="button" class="search-scope-option active" data-search-scope="currentFile" role="radio" aria-checked="true">
+                    <span class="choice-indicator" aria-hidden="true"></span>
+                    <span>当前文件</span>
+                  </button>
+                  <button type="button" class="search-scope-option" data-search-scope="all" role="radio" aria-checked="false">
+                    <span class="choice-indicator" aria-hidden="true"></span>
+                    <span>全部文件</span>
+                  </button>
+                </div>
+                <select id="searchScope" hidden>
+                  <option value="currentFile">当前文件</option>
+                  <option value="all">全部文件</option>
+                </select>
+              </div>
+              <div class="row row-wrap search-secondary-actions">
+                <label class="checkbox">
+                  <input id="caseSensitive" type="checkbox">
+                  大小写敏感
+                </label>
+                <button id="searchResetBtn" class="btn-secondary" type="button">重置</button>
+                <button id="searchPrevBtn" class="btn-icon btn-ghost" type="button" title="上一个命中" aria-label="上一个命中" hidden aria-hidden="true">↑</button>
+                <button id="searchNextBtn" class="btn-icon btn-ghost" type="button" title="下一个命中" aria-label="下一个命中" hidden aria-hidden="true">↓</button>
+              </div>
+              <div class="search-feedback">
+                <div id="searchConfirmHint" class="search-confirm-hint" hidden></div>
+                <div id="historySearchDirtyHint" class="search-draft-hint" hidden></div>
+              </div>
+            </section>
+
+            <section id="realtimeSearchPanel" class="search-mode-panel" hidden>
+              <div class="drawer-field">
+                <div class="field-label">关键词</div>
+                <div class="row search-input-row">
+                  <input id="realtimeKeyword" type="text" placeholder="输入关键词">
+                  <button id="realtimeApplyBtn" class="btn-secondary" type="button">开始监控</button>
+                  <button id="realtimeStopBtn" class="btn-secondary" type="button">停止监控</button>
+                </div>
+              </div>
+              <div class="row row-wrap search-secondary-actions">
+                <label class="checkbox">
+                  <input id="realtimeCaseSensitive" type="checkbox">
+                  大小写敏感
+                </label>
+                <button id="realtimeClearBtn" class="btn-secondary" type="button">清空命中</button>
+                <button id="realtimePrevBtn" class="btn-icon btn-ghost" title="上一个实时命中" aria-label="上一个实时命中">↑</button>
+                <button id="realtimeNextBtn" class="btn-icon btn-ghost" title="下一个实时命中" aria-label="下一个实时命中">↓</button>
+              </div>
+            </section>
+          </section>
+
+          <section class="drawer-group drawer-group-results">
+            <div class="drawer-group-title"><span>搜索结果</span></div>
+            <section id="historyResultsPanel" class="search-results-panel">
+              <div class="search-status-stack">
+                <div id="searchNavInfo" class="muted small">未执行搜索</div>
+                <div id="searchSummary" class="muted small"></div>
+              </div>
+              <div class="row search-group-tools">
+                <button id="searchExpandAllBtn" class="btn-secondary" type="button">展开全部</button>
+                <button id="searchCollapseAllBtn" class="btn-secondary" type="button">折叠全部</button>
+              </div>
+              <div id="searchResults" class="search-results">
+                <div class="search-empty-state">
+                  <div class="search-empty-title">暂无搜索结果</div>
+                  <div class="search-empty-hint">请输入关键词并点击搜索</div>
+                </div>
+              </div>
+            </section>
+            <section id="realtimeResultsPanel" class="search-results-panel" hidden>
+              <div class="search-status-stack">
+                <div id="realtimeSearchNavInfo" class="muted small">未开始监控</div>
+                <div id="realtimeSearchStatus" class="muted small"></div>
+                <div class="muted small">实时命中只看新到日志；点击命中可定位到当前缓冲或切进历史查看。</div>
+                <div id="realtimeSearchHint" class="search-draft-hint" hidden></div>
+              </div>
+              <div id="realtimeSearchResults" class="search-results"></div>
+            </section>
           </section>
         </div>
       </div>
@@ -219,6 +268,6 @@
 
 <div id="toastContainer" class="toast-container"></div>
 
-<script src="/app.js?v=20260318a"></script>
+<script src="/app.js?v=20260320a"></script>
 </body>
 </html>

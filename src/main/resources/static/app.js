@@ -12,6 +12,7 @@
   const LOG_FONT_SIZE_STEP = 1;
   const TAB_IDLE_PAUSE_MS = 30 * 60 * 1000;
   const TAB_IDLE_CHECK_MS = 60 * 1000;
+  const WS_HEARTBEAT_MS = 30 * 1000;
   const REALTIME_HIT_LIMIT = 120;
 
   const state = {
@@ -106,6 +107,7 @@
     logContent: $("logContent"),
     searchKeyword: $("searchKeyword"),
     searchScope: $("searchScope"),
+    searchScopeButtons: Array.from(document.querySelectorAll(".search-scope-option[data-search-scope]")),
     searchDateRangeRow: $("searchDateRangeRow"),
     searchDateStart: $("searchDateStart"),
     searchDateEnd: $("searchDateEnd"),
@@ -127,6 +129,8 @@
     searchModeTabs: Array.from(document.querySelectorAll(".search-mode-tab[data-search-panel]")),
     historySearchPanel: $("historySearchPanel"),
     realtimeSearchPanel: $("realtimeSearchPanel"),
+    historyResultsPanel: $("historyResultsPanel"),
+    realtimeResultsPanel: $("realtimeResultsPanel"),
     realtimeKeyword: $("realtimeKeyword"),
     realtimeCaseSensitive: $("realtimeCaseSensitive"),
     realtimeApplyBtn: $("realtimeApplyBtn"),
@@ -176,7 +180,7 @@
         item.parentElement.removeChild(item);
       }
     };
-    setTimeout(remove, Math.max(1200, timeoutMs || 2800));
+    setTimeout(remove, Math.max(kind === "error" ? 8000 : 1200, timeoutMs || 2800));
   }
 
   function logTypeLabel(logType) {
@@ -193,6 +197,37 @@
     document.querySelectorAll(".file-type-tab[data-log-type]").forEach((btn) => {
       const type = btn.dataset.logType === "error" ? "error" : "normal";
       btn.classList.toggle("active", type === state.logType);
+      btn.setAttribute("aria-pressed", type === state.logType ? "true" : "false");
+    });
+  }
+
+  function normalizeSearchScope(value) {
+    if (!value || value === "currentFile") {
+      return "currentFile";
+    }
+    return "all";
+  }
+
+  function syncSearchScopeButtons() {
+    const activeValue = normalizeSearchScope(els.searchScope ? els.searchScope.value : "currentFile");
+    if (els.searchScope && els.searchScope.value !== activeValue) {
+      els.searchScope.value = activeValue;
+    }
+    if (!Array.isArray(els.searchScopeButtons)) return;
+    els.searchScopeButtons.forEach((btn) => {
+      const active = btn.dataset.searchScope === activeValue;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-checked", active ? "true" : "false");
+    });
+  }
+
+  function syncSearchPresetButtons() {
+    if (!Array.isArray(els.searchPresetButtons)) return;
+    const keyword = els.searchKeyword ? String(els.searchKeyword.value || "").trim() : "";
+    els.searchPresetButtons.forEach((btn) => {
+      const preset = String(btn.dataset.searchPreset || "").trim();
+      btn.classList.toggle("active", !!keyword && preset === keyword);
+      btn.setAttribute("aria-pressed", preset === keyword ? "true" : "false");
     });
   }
 
@@ -253,6 +288,11 @@
     if (els.openLatestBtn) els.openLatestBtn.disabled = !hasFiles;
     if (els.searchKeyword) els.searchKeyword.disabled = !hasProject;
     if (els.searchScope) els.searchScope.disabled = !hasProject;
+    if (Array.isArray(els.searchScopeButtons)) {
+      els.searchScopeButtons.forEach((btn) => {
+        btn.disabled = !hasProject;
+      });
+    }
     if (els.searchContextLines) els.searchContextLines.disabled = !hasProject;
     if (els.caseSensitive) els.caseSensitive.disabled = !hasProject;
     if (els.searchBtn) els.searchBtn.disabled = !hasProject;
@@ -266,6 +306,8 @@
         btn.disabled = !hasProject;
       });
     }
+    syncSearchScopeButtons();
+    syncSearchPresetButtons();
     updateSearchDateRangeUI();
     updateSearchNavigationUI();
     updateTabActionButtons();
@@ -411,7 +453,7 @@
     tab.lastHistorySearchStartTime = state.lastHistorySearchStartTime || "";
     tab.lastHistorySearchEndTime = state.lastHistorySearchEndTime || "";
     tab.searchKeywordInput = els.searchKeyword ? els.searchKeyword.value : "";
-    tab.searchScopeValue = els.searchScope ? els.searchScope.value : "currentFile";
+    tab.searchScopeValue = normalizeSearchScope(els.searchScope ? els.searchScope.value : "currentFile");
     tab.searchDateStartValue = els.searchDateStart ? els.searchDateStart.value : "";
     tab.searchDateEndValue = els.searchDateEnd ? els.searchDateEnd.value : "";
     tab.searchDateRangeDirty = !!state.searchDateRangeDirty;
@@ -468,7 +510,7 @@
     state.wsConnected = !!tab.wsConnected;
     if (els.searchKeyword) els.searchKeyword.value = tab.searchKeywordInput || "";
     if (els.searchScope) {
-      els.searchScope.value = tab.searchScopeValue || "currentFile";
+      els.searchScope.value = normalizeSearchScope(tab.searchScopeValue || "currentFile");
       if (!els.searchScope.value) {
         els.searchScope.value = "currentFile";
       }
@@ -482,6 +524,8 @@
     if (els.fileFilter) els.fileFilter.value = tab.fileFilterInput || "";
     if (els.currentProjectLabel) els.currentProjectLabel.textContent = tab.projectPath || "-";
     if (els.currentFileLabel) els.currentFileLabel.textContent = tab.currentFile || "-";
+    syncSearchScopeButtons();
+    syncSearchPresetButtons();
     updateCurrentLogTypeLabel(state.logType);
     renderLogTypeTabs();
     renderFiles();
@@ -784,6 +828,19 @@
     }, TAB_IDLE_CHECK_MS);
   }
 
+  function startWebSocketHeartbeat() {
+    window.setInterval(() => {
+      for (const tab of state.tabs) {
+        if (!tab || !tab.ws || tab.ws.readyState !== WebSocket.OPEN) continue;
+        try {
+          tab.ws.send(JSON.stringify({ type: "ping" }));
+        } catch (e) {
+          console.warn(e);
+        }
+      }
+    }, WS_HEARTBEAT_MS);
+  }
+
   async function resumeTabRealtime(tab) {
     if (!tab || !tab.realtimeWanted) return;
     tab.pausedByIdle = false;
@@ -990,10 +1047,42 @@
     });
     if (!resp.ok) {
       const text = await resp.text();
-      throw new Error(text || `HTTP ${resp.status}`);
+      let message = text || `HTTP ${resp.status}`;
+      let code = "";
+      try {
+        const parsed = text ? JSON.parse(text) : null;
+        if (parsed && typeof parsed === "object") {
+          message = parsed.message || parsed.error || parsed.code || message;
+          code = parsed.code || "";
+        }
+      } catch (e) {
+        // Keep original text when the response is not JSON.
+      }
+      const err = new Error(formatFriendlyErrorMessage(message, code));
+      err.code = code;
+      err.rawMessage = message;
+      err.httpStatus = resp.status;
+      throw err;
     }
     const ct = resp.headers.get("content-type") || "";
     return ct.includes("application/json") ? await resp.json() : await resp.text();
+  }
+
+  function formatFriendlyErrorMessage(message, code = "") {
+    const raw = String(message || "").trim();
+    const normalized = raw.replace(/\s+/g, " ");
+    if (code === "LOG_FILE_NOT_FOUND") {
+      return "未找到匹配的日志文件，请先刷新文件列表后重试。";
+    }
+    if (code === "REMOTE_STAT_FAILED" || code === "REMOTE_READ_FAILED") {
+      if (/No such file|cannot stat|cannot open|not found/i.test(normalized)) {
+        return "日志文件不存在或已被切换/删除，请刷新文件列表后重试。";
+      }
+    }
+    if (/No such file|cannot stat|cannot open|not found/i.test(normalized) && /\.log\b/i.test(normalized)) {
+      return `日志文件不存在或已被切换/删除，请刷新文件列表后重试。\n原始错误：${raw}`;
+    }
+    return raw || "操作失败";
   }
 
   function asArray(data) {
@@ -1112,15 +1201,12 @@
       els.searchDateCurrentBtn.disabled = !hasProject || (!els.searchDateStart.value && !els.searchDateEnd.value);
     }
     if (!els.searchDateRangeHint) return;
-    if (!hasProject) {
-      els.searchDateRangeHint.textContent = "先选择项目，再按时间筛日志行。";
-      return;
+    let hint = "";
+    if (hasProject && timeRange) {
+      hint = `当前时间范围 ${timeRange.startTime} - ${timeRange.endTime}${timeRange.wrapsMidnight ? "（跨午夜）" : ""}`;
     }
-    if (!timeRange) {
-      els.searchDateRangeHint.textContent = "上面筛日志行时间，下方下拉框筛日志文件范围。时间留空表示不限制；没有关键字时会显示时间范围内第一行。";
-      return;
-    }
-    els.searchDateRangeHint.textContent = `当前日志行时间范围 ${timeRange.startTime} - ${timeRange.endTime}${timeRange.wrapsMidnight ? "（跨午夜）" : ""}。没有关键字时会显示该范围内第一行。`;
+    els.searchDateRangeHint.textContent = hint;
+    els.searchDateRangeHint.hidden = !hint;
   }
 
   function syncSearchDateRangeWithCurrentFile(force = false) {
@@ -1296,6 +1382,8 @@
     if (els.searchSummary) {
       els.searchSummary.textContent = state.lastHistorySearchSummary || "";
     }
+    syncSearchPresetButtons();
+    syncSearchScopeButtons();
     updateHistorySearchDirtyHint();
     updateRealtimeMonitorStatus();
   }
@@ -1355,7 +1443,9 @@
     state.searchPanelMode = nextMode;
     if (Array.isArray(els.searchModeTabs)) {
       els.searchModeTabs.forEach((btn) => {
-        btn.classList.toggle("active", btn.dataset.searchPanel === nextMode);
+        const active = btn.dataset.searchPanel === nextMode;
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-checked", active ? "true" : "false");
       });
     }
     if (els.historySearchPanel) {
@@ -1363,6 +1453,12 @@
     }
     if (els.realtimeSearchPanel) {
       els.realtimeSearchPanel.hidden = nextMode !== "realtime";
+    }
+    if (els.historyResultsPanel) {
+      els.historyResultsPanel.hidden = nextMode !== "history";
+    }
+    if (els.realtimeResultsPanel) {
+      els.realtimeResultsPanel.hidden = nextMode !== "realtime";
     }
     updateSearchNavigationUI();
     if (!skipSync) {
@@ -1406,7 +1502,16 @@
     if (els.searchDateEnd) els.searchDateEnd.value = "";
     if (els.searchContextLines) els.searchContextLines.value = "2";
     if (els.caseSensitive) els.caseSensitive.checked = false;
-    if (els.searchResults) els.searchResults.innerHTML = `<div class="muted small">未搜索</div>`;
+    syncSearchScopeButtons();
+    syncSearchPresetButtons();
+    if (els.searchResults) {
+      els.searchResults.innerHTML = `
+        <div class="search-empty-state">
+          <div class="search-empty-title">暂无搜索结果</div>
+          <div class="search-empty-hint">请输入关键词并点击搜索</div>
+        </div>
+      `;
+    }
     syncSearchDateRangeWithCurrentFile(true);
     clearSearchConfirmHint();
     updateSearchDateRangeUI();
@@ -1531,7 +1636,7 @@
     if (els.searchNextBtn) els.searchNextBtn.disabled = !historyHasHits;
     if (els.searchNavInfo) {
       if (!historyHasHits) {
-        els.searchNavInfo.textContent = state.lastHistorySearchSummary ? "没有匹配结果" : "未搜索";
+        els.searchNavInfo.textContent = state.lastHistorySearchSummary ? "没有匹配结果" : "未执行搜索";
       } else {
         const current = state.searchCursor >= 0 ? state.searchCursor + 1 : 0;
         els.searchNavInfo.textContent = `当前命中 ${current}/${historyTotal}`;
@@ -2159,7 +2264,12 @@
     }
     state.currentFileMeta = f;
     state.currentFile = f.fileName;
-    els.fileMeta.textContent = `date=${f.date} index=${f.index} size=${formatBytes(f.size)} mtime=${new Date(f.mtimeEpochMs).toLocaleString()}`;
+    const parts = [
+      formatLogFileDateLabel(f.date, f.mtimeEpochMs),
+      formatBytes(f.size),
+      formatTimeOnly(f.mtimeEpochMs)
+    ].filter(Boolean);
+    els.fileMeta.textContent = parts.join("  ·  ");
     syncSearchDateRangeWithCurrentFile();
     syncStateToActiveTab();
     updateActionAvailability();
@@ -2569,6 +2679,7 @@
     container,
     hits,
     placeholder,
+    placeholderHtml,
     fallbackKeyword,
     caseSensitive,
     timeRange
@@ -2576,7 +2687,7 @@
     if (!container) return;
     container.innerHTML = "";
     if (!hits.length) {
-      container.innerHTML = `<div class="muted small">${placeholder}</div>`;
+      container.innerHTML = placeholderHtml || `<div class="muted small">${placeholder}</div>`;
       return;
     }
     const groups = groupHitsByFile(hits);
@@ -2652,12 +2763,18 @@
 
   function renderSearchResults(keyword = state.lastSearchKeyword) {
     const hits = getVisibleSearchHits("history");
-    const placeholder = state.lastHistorySearchSummary ? "没有匹配结果" : "未搜索";
+    const placeholder = "暂无搜索结果";
     renderSearchHitsList({
       mode: "history",
       container: els.searchResults,
       hits,
       placeholder,
+      placeholderHtml: `
+        <div class="search-empty-state">
+          <div class="search-empty-title">暂无搜索结果</div>
+          <div class="search-empty-hint">请输入关键词并点击搜索</div>
+        </div>
+      `,
       fallbackKeyword: keyword || state.lastSearchKeyword,
       caseSensitive: getHistorySearchHighlightCaseSensitive(),
       timeRange: getAppliedSearchTimeRange()
@@ -3181,12 +3298,33 @@
     if (els.searchResetBtn) {
       els.searchResetBtn.addEventListener("click", resetSearchPanel);
     }
-    els.searchPrevBtn.addEventListener("click", () => moveSearchCursor(-1).catch(showError));
-    els.searchNextBtn.addEventListener("click", () => moveSearchCursor(1).catch(showError));
-    els.searchScope.addEventListener("change", () => {
-      updateSearchDateRangeUI();
-      markHistorySearchDirty();
-    });
+    if (els.searchPrevBtn) {
+      els.searchPrevBtn.addEventListener("click", () => moveSearchCursor(-1).catch(showError));
+    }
+    if (els.searchNextBtn) {
+      els.searchNextBtn.addEventListener("click", () => moveSearchCursor(1).catch(showError));
+    }
+    if (Array.isArray(els.searchScopeButtons)) {
+      els.searchScopeButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          if (!els.searchScope) return;
+          const nextValue = normalizeSearchScope(btn.dataset.searchScope || "currentFile");
+          if (els.searchScope.value === nextValue) return;
+          els.searchScope.value = nextValue;
+          syncSearchScopeButtons();
+          updateSearchDateRangeUI();
+          markHistorySearchDirty();
+        });
+      });
+    }
+    if (els.searchScope) {
+      els.searchScope.addEventListener("change", () => {
+        els.searchScope.value = normalizeSearchScope(els.searchScope.value);
+        syncSearchScopeButtons();
+        updateSearchDateRangeUI();
+        markHistorySearchDirty();
+      });
+    }
     if (els.searchDateStart) {
       els.searchDateStart.addEventListener("change", () => {
         state.searchDateRangeDirty = true;
@@ -3230,20 +3368,24 @@
       els.searchPresetButtons.forEach((btn) => {
         btn.addEventListener("click", () => {
           if (els.searchKeyword) els.searchKeyword.value = btn.dataset.searchPreset || "";
+          syncSearchPresetButtons();
           markHistorySearchDirty();
           searchLogs().catch(showError);
         });
       });
     }
-    els.searchKeyword.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        searchLogs().catch(showError);
-      }
-    });
-    els.searchKeyword.addEventListener("input", () => {
-      markHistorySearchDirty();
-    });
+    if (els.searchKeyword) {
+      els.searchKeyword.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          searchLogs().catch(showError);
+        }
+      });
+      els.searchKeyword.addEventListener("input", () => {
+        syncSearchPresetButtons();
+        markHistorySearchDirty();
+      });
+    }
     if (els.realtimeApplyBtn) {
       els.realtimeApplyBtn.addEventListener("click", () => applyRealtimeMonitor().catch(showError));
     }
@@ -3307,8 +3449,12 @@
 
   function showError(err) {
     console.error(err);
-    setStatus("操作失败", "error");
-    notify(err && err.message ? err.message : String(err), "error", 4200);
+    const message = formatFriendlyErrorMessage(
+      err && (err.rawMessage || err.message) ? (err.rawMessage || err.message) : String(err),
+      err && err.code ? err.code : ""
+    );
+    setStatus(message, "error");
+    notify(message, "error", 10000);
   }
 
   function escapeHtml(s) {
@@ -3346,13 +3492,33 @@
     return `${(n / 1024 ** 3).toFixed(1)} GB`;
   }
 
+  function formatLogFileDateLabel(raw, fallbackEpochMs) {
+    const value = String(raw || "").trim();
+    if (/^\d{8}$/.test(value)) {
+      return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+    }
+    if (value) {
+      return value;
+    }
+    if (!fallbackEpochMs) return "";
+    return new Date(fallbackEpochMs).toLocaleDateString("zh-CN");
+  }
+
+  function formatTimeOnly(epochMs) {
+    if (!epochMs) return "";
+    return new Date(epochMs).toLocaleTimeString("zh-CN", { hour12: false });
+  }
+
   async function init() {
     bindEvents();
     applyFilterDrawerCollapsed(loadFilterDrawerCollapsedPreference());
     applySidebarWidth(loadSidebarWidthPreference());
     ensureAtLeastOneTab();
     startTabIdleMonitor();
+    startWebSocketHeartbeat();
     applyLogFontSize(loadLogFontSizePreference());
+    syncSearchScopeButtons();
+    syncSearchPresetButtons();
     updateSearchNavigationUI();
     updateSearchGroupToolButtons();
     updateActionAvailability();

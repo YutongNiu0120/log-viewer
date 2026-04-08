@@ -54,7 +54,7 @@ public class SshRemoteLogClient implements RemoteLogClient {
 
     @Override
     public TailStreamHandle openTail(ServerConfig server, String filePath) {
-        String command = wrapBash("tail -n 0 -F -- " + ShellQuoter.sq(filePath), true);
+        String command = wrapTailCommand(filePath);
         try {
             SSHClient ssh = connect(server);
             Session session = ssh.startSession();
@@ -107,14 +107,26 @@ public class SshRemoteLogClient implements RemoteLogClient {
         if (!lowImpact) {
             return "bash -lc " + ShellQuoter.sq(shellCommand);
         }
-        String quoted = ShellQuoter.sq(shellCommand);
         String inner =
                 "if command -v ionice >/dev/null 2>&1 && command -v nice >/dev/null 2>&1; then\n" +
-                "  ionice -c3 nice -n 19 bash -lc " + quoted + "\n" +
+                "  ionice -c3 nice -n 19 bash -lc " + ShellQuoter.sq(shellCommand) + "\n" +
                 "elif command -v nice >/dev/null 2>&1; then\n" +
-                "  nice -n 19 bash -lc " + quoted + "\n" +
+                "  nice -n 19 bash -lc " + ShellQuoter.sq(shellCommand) + "\n" +
                 "else\n" +
-                "  bash -lc " + quoted + "\n" +
+                "  bash -lc " + ShellQuoter.sq(shellCommand) + "\n" +
+                "fi\n";
+        return "bash -lc " + ShellQuoter.sq(inner);
+    }
+
+    private String wrapTailCommand(String filePath) {
+        String tailCommand = "exec tail -n 0 -F -- " + ShellQuoter.sq(filePath);
+        String inner =
+                "if command -v ionice >/dev/null 2>&1 && command -v nice >/dev/null 2>&1; then\n" +
+                "  exec ionice -c3 nice -n 19 bash -lc " + ShellQuoter.sq(tailCommand) + "\n" +
+                "elif command -v nice >/dev/null 2>&1; then\n" +
+                "  exec nice -n 19 bash -lc " + ShellQuoter.sq(tailCommand) + "\n" +
+                "else\n" +
+                "  exec bash -lc " + ShellQuoter.sq(tailCommand) + "\n" +
                 "fi\n";
         return "bash -lc " + ShellQuoter.sq(inner);
     }

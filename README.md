@@ -2,6 +2,10 @@
 
 Docker 部署的只读日志查看器（Spring Boot 2.7 + Java 8 + Web UI）。
 
+## 界面预览
+
+![Log Viewer 界面预览](./demo.png)
+
 功能（V1）：
 
 - 两台模板服务器配置与切换（配置文件保存）

@@ -61,6 +61,7 @@
     historySearchDirty: false,
     realtimeMonitorKeyword: "",
     realtimeMonitorCaseSensitive: false,
+    realtimeMonitorContextLines: 0,
     realtimeMonitorDirty: false,
     searchPanelMode: "history",
     logBuffer: "",
@@ -133,6 +134,7 @@
     realtimeResultsPanel: $("realtimeResultsPanel"),
     realtimeKeyword: $("realtimeKeyword"),
     realtimeCaseSensitive: $("realtimeCaseSensitive"),
+    realtimeContextLines: $("realtimeContextLines"),
     realtimeApplyBtn: $("realtimeApplyBtn"),
     realtimeStopBtn: $("realtimeStopBtn"),
     realtimeClearBtn: $("realtimeClearBtn"),
@@ -299,6 +301,7 @@
     if (els.searchResetBtn) els.searchResetBtn.disabled = !hasProject;
     if (els.realtimeKeyword) els.realtimeKeyword.disabled = !hasProject;
     if (els.realtimeCaseSensitive) els.realtimeCaseSensitive.disabled = !hasProject;
+    if (els.realtimeContextLines) els.realtimeContextLines.disabled = !hasProject;
     if (els.realtimeApplyBtn) els.realtimeApplyBtn.disabled = !hasProject;
     if (els.clearViewerBtn) els.clearViewerBtn.disabled = !hasProject;
     if (Array.isArray(els.searchPresetButtons)) {
@@ -386,9 +389,11 @@
       searchContextLinesValue: "2",
       caseSensitiveValue: false,
       realtimeKeywordInput: "",
+      realtimeContextLinesValue: "0",
       realtimeCaseSensitiveValue: false,
       realtimeMonitorKeyword: "",
       realtimeMonitorCaseSensitive: false,
+      realtimeMonitorContextLines: 0,
       realtimeMonitorDirty: false,
       searchPanelMode: "history",
       fileFilterInput: "",
@@ -461,9 +466,11 @@
     tab.searchContextLinesValue = els.searchContextLines ? els.searchContextLines.value : "2";
     tab.caseSensitiveValue = !!(els.caseSensitive && els.caseSensitive.checked);
     tab.realtimeKeywordInput = els.realtimeKeyword ? els.realtimeKeyword.value : "";
+    tab.realtimeContextLinesValue = els.realtimeContextLines ? els.realtimeContextLines.value : "0";
     tab.realtimeCaseSensitiveValue = !!(els.realtimeCaseSensitive && els.realtimeCaseSensitive.checked);
     tab.realtimeMonitorKeyword = state.realtimeMonitorKeyword || "";
     tab.realtimeMonitorCaseSensitive = !!state.realtimeMonitorCaseSensitive;
+    tab.realtimeMonitorContextLines = normalizeRealtimeContextLines(state.realtimeMonitorContextLines);
     tab.realtimeMonitorDirty = !!state.realtimeMonitorDirty;
     tab.searchPanelMode = state.searchPanelMode === "realtime" ? "realtime" : "history";
     tab.fileFilterInput = els.fileFilter ? els.fileFilter.value : "";
@@ -504,6 +511,7 @@
     state.historySearchDirty = !!tab.historySearchDirty;
     state.realtimeMonitorKeyword = tab.realtimeMonitorKeyword || "";
     state.realtimeMonitorCaseSensitive = !!tab.realtimeMonitorCaseSensitive;
+    state.realtimeMonitorContextLines = normalizeRealtimeContextLines(tab.realtimeMonitorContextLines);
     state.realtimeMonitorDirty = !!tab.realtimeMonitorDirty;
     state.searchPanelMode = tab.searchPanelMode === "realtime" ? "realtime" : "history";
     state.ws = tab.ws || null;
@@ -520,6 +528,7 @@
     if (els.searchContextLines) els.searchContextLines.value = tab.searchContextLinesValue || "2";
     if (els.caseSensitive) els.caseSensitive.checked = !!tab.caseSensitiveValue;
     if (els.realtimeKeyword) els.realtimeKeyword.value = tab.realtimeKeywordInput || "";
+    if (els.realtimeContextLines) els.realtimeContextLines.value = tab.realtimeContextLinesValue || "0";
     if (els.realtimeCaseSensitive) els.realtimeCaseSensitive.checked = !!tab.realtimeCaseSensitiveValue;
     if (els.fileFilter) els.fileFilter.value = tab.fileFilterInput || "";
     if (els.currentProjectLabel) els.currentProjectLabel.textContent = tab.projectPath || "-";
@@ -1235,6 +1244,16 @@
     return els.realtimeKeyword ? els.realtimeKeyword.value.trim() : "";
   }
 
+  function normalizeRealtimeContextLines(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.max(0, Math.min(Math.trunc(numeric), 20));
+  }
+
+  function getRealtimeDraftContextLines() {
+    return normalizeRealtimeContextLines(els.realtimeContextLines ? els.realtimeContextLines.value : 0);
+  }
+
   function getRealtimeDraftCaseSensitive() {
     return !!(els.realtimeCaseSensitive && els.realtimeCaseSensitive.checked);
   }
@@ -1269,6 +1288,24 @@
       return !!state.realtimeMonitorCaseSensitive;
     }
     return !!tab.realtimeMonitorCaseSensitive;
+  }
+
+  function getRealtimeMonitorContextLines(tab = getActiveTab()) {
+    if (!tab) return 0;
+    if (tab.id === state.activeTabId) {
+      return normalizeRealtimeContextLines(state.realtimeMonitorContextLines);
+    }
+    return normalizeRealtimeContextLines(tab.realtimeMonitorContextLines);
+  }
+
+  function getAppliedRealtimeFilterOptions() {
+    const keyword = (state.realtimeMonitorKeyword || "").trim();
+    if (!keyword) return null;
+    return {
+      keyword,
+      caseSensitive: !!state.realtimeMonitorCaseSensitive,
+      contextLines: getRealtimeMonitorContextLines()
+    };
   }
 
   function getEffectiveViewerHighlightKeyword() {
@@ -1316,8 +1353,10 @@
 
   function syncRealtimeMonitorDirtyFlag() {
     const draftKeyword = getRealtimeDraftKeywordText();
+    const draftContextLines = getRealtimeDraftContextLines();
     const draftCaseSensitive = getRealtimeDraftCaseSensitive();
     state.realtimeMonitorDirty = draftKeyword !== (state.realtimeMonitorKeyword || "")
+      || draftContextLines !== normalizeRealtimeContextLines(state.realtimeMonitorContextLines)
       || draftCaseSensitive !== !!state.realtimeMonitorCaseSensitive;
   }
 
@@ -1337,22 +1376,19 @@
   function updateRealtimeMonitorStatus() {
     const tab = getActiveTab();
     const activeKeyword = (state.realtimeMonitorKeyword || "").trim();
-    const hitCount = (state.realtimeHits || []).length;
+    const contextLines = getRealtimeMonitorContextLines(tab);
     if (els.realtimeSearchStatus) {
       if (activeKeyword) {
         if (tab && tab.pausedByIdle) {
-          els.realtimeSearchStatus.textContent = `监控 "${activeKeyword}" 已暂停，恢复实时后继续接收命中。`;
+          els.realtimeSearchStatus.textContent = `监控 "${activeKeyword}" 已暂停，恢复实时后继续显示命中及前后 ${contextLines} 行。`;
           els.realtimeSearchStatus.className = "muted small";
         } else if (tab && tab.realtimeWanted) {
-          els.realtimeSearchStatus.textContent = `实时监控 "${activeKeyword}" | 当前缓存 ${hitCount} 条命中`;
+          els.realtimeSearchStatus.textContent = `实时监控 "${activeKeyword}" | 前后 ${contextLines} 行`;
           els.realtimeSearchStatus.className = "muted small search-live-active";
         } else {
-          els.realtimeSearchStatus.textContent = `已配置监控 "${activeKeyword}"，回到实时后开始接收命中。`;
+          els.realtimeSearchStatus.textContent = `已配置监控 "${activeKeyword}"（前后 ${contextLines} 行），回到实时后只显示命中及上下文。`;
           els.realtimeSearchStatus.className = "muted small";
         }
-      } else if (hitCount) {
-        els.realtimeSearchStatus.textContent = `未监控，保留最近 ${hitCount} 条命中缓存。`;
-        els.realtimeSearchStatus.className = "muted small";
       } else {
         els.realtimeSearchStatus.textContent = "未开始监控。";
         els.realtimeSearchStatus.className = "muted small";
@@ -1372,9 +1408,6 @@
     }
     if (els.realtimeStopBtn) {
       els.realtimeStopBtn.disabled = !state.projectPath || !activeKeyword;
-    }
-    if (els.realtimeClearBtn) {
-      els.realtimeClearBtn.disabled = !state.projectPath || hitCount === 0;
     }
   }
 
@@ -1403,12 +1436,14 @@
     state.historySearchDirty = false;
     state.realtimeMonitorKeyword = "";
     state.realtimeMonitorCaseSensitive = false;
+    state.realtimeMonitorContextLines = 0;
     state.realtimeMonitorDirty = false;
     state.focusLineText = "";
     state.viewerHighlightKeyword = "";
     state.viewerHighlightCaseSensitive = false;
     state.pendingAllSearchConfirm = null;
     if (els.realtimeKeyword) els.realtimeKeyword.value = "";
+    if (els.realtimeContextLines) els.realtimeContextLines.value = "0";
     if (els.realtimeCaseSensitive) els.realtimeCaseSensitive.checked = false;
     clearSearchConfirmHint();
     renderLogBuffer();
@@ -1643,19 +1678,10 @@
       }
     }
 
-    const realtimeTotal = getVisibleSearchHits("realtime").length;
-    const realtimeHasHits = realtimeTotal > 0 && !!state.projectPath;
-    if (els.realtimePrevBtn) els.realtimePrevBtn.disabled = !realtimeHasHits;
-    if (els.realtimeNextBtn) els.realtimeNextBtn.disabled = !realtimeHasHits;
     if (els.realtimeSearchNavInfo) {
-      if (!realtimeHasHits) {
-        els.realtimeSearchNavInfo.textContent = state.realtimeMonitorKeyword
-          ? "实时监控中，暂无命中"
-          : "未开始监控";
-      } else {
-        const current = state.realtimeSearchCursor >= 0 ? state.realtimeSearchCursor + 1 : 0;
-        els.realtimeSearchNavInfo.textContent = `当前命中 ${current}/${realtimeTotal}`;
-      }
+      els.realtimeSearchNavInfo.textContent = state.realtimeMonitorKeyword
+        ? "实时模式只在主日志区显示过滤结果，不再生成右侧命中列表。"
+        : "未开始监控";
     }
   }
 
@@ -2401,7 +2427,6 @@
         tab.currentFile = msg.fileName;
       }
       const shouldFollow = state.autoFollow;
-      collectRealtimeHitsForTab(tab, msg.lines || [], tab.currentFile || msg.fileName);
       const text = (msg.lines || []).join("\n") + ((msg.lines || []).length ? "\n" : "");
       appendTextToTabBuffer(tab, text);
       if (tab.id === state.activeTabId) {
@@ -2488,25 +2513,48 @@
   async function openFile(fileName, latestMode) {
     const tab = getActiveTab();
     const previousScrollLeft = els.logViewer ? els.logViewer.scrollLeft : 0;
+    const realtimeFilter = getAppliedRealtimeFilterOptions();
     state.focusLineText = "";
     state.viewerHighlightKeyword = "";
     state.viewerHighlightCaseSensitive = false;
     state.currentFile = fileName;
     els.currentFileLabel.textContent = fileName;
-    const qs = new URLSearchParams({
-      serverId: state.serverId,
-      projectPath: state.projectPath,
-      file: fileName,
-      tailBytes: "65536"
-    });
-    const chunk = await api(`/api/logs/content/tail?${qs.toString()}`);
-    state.fileSize = (chunk && chunk.fileSize) || 0;
-    state.startOffset = (chunk && chunk.startOffset) || 0;
-    state.endOffset = (chunk && chunk.endOffset) || 0;
-    const tailText = (chunk && typeof chunk.text === "string") ? chunk.text : "";
+    let tailText = "";
+    if (realtimeFilter) {
+      const qs = new URLSearchParams({
+        serverId: state.serverId,
+        projectPath: state.projectPath,
+        file: fileName,
+        lines: "200",
+        keyword: realtimeFilter.keyword,
+        caseSensitive: String(!!realtimeFilter.caseSensitive),
+        contextLines: String(realtimeFilter.contextLines)
+      });
+      const snapshot = await api(`/api/logs/content/tail-lines?${qs.toString()}`);
+      state.fileSize = 0;
+      state.startOffset = 0;
+      state.endOffset = 0;
+      tailText = (snapshot && typeof snapshot.text === "string") ? snapshot.text : "";
+    } else {
+      const qs = new URLSearchParams({
+        serverId: state.serverId,
+        projectPath: state.projectPath,
+        file: fileName,
+        tailBytes: "65536"
+      });
+      const chunk = await api(`/api/logs/content/tail?${qs.toString()}`);
+      state.fileSize = (chunk && chunk.fileSize) || 0;
+      state.startOffset = (chunk && chunk.startOffset) || 0;
+      state.endOffset = (chunk && chunk.endOffset) || 0;
+      tailText = (chunk && typeof chunk.text === "string") ? chunk.text : "";
+    }
     setLogText(tailText);
     if (!tailText) {
-      appendLogText("[system] 当前文件暂无可读内容（可能为空文件，或账号无读取权限）\n", true);
+      if (realtimeFilter) {
+        appendLogText(`[system] 实时监控已开启，仅显示命中与前后 ${realtimeFilter.contextLines} 行，当前窗口暂无匹配。\n`, true);
+      } else {
+        appendLogText("[system] 当前文件暂无可读内容（可能为空文件，或账号无读取权限）\n", true);
+      }
     }
     scrollToBottom();
     if (els.logViewer) {
@@ -2519,7 +2567,7 @@
       tab.lastRealtimeFile = latestMode ? fileName : fileName;
       tab.title = buildTabTitle(tab);
     }
-    wsSend({
+    const payload = {
       type: "open_stream",
       serverId: state.serverId,
       projectPath: state.projectPath,
@@ -2527,8 +2575,17 @@
       mode: latestMode ? "latest" : "file",
       file: latestMode ? undefined : fileName,
       tailLines: 0
-    }, tab);
+    };
+    if (realtimeFilter) {
+      payload.keyword = realtimeFilter.keyword;
+      payload.caseSensitive = !!realtimeFilter.caseSensitive;
+      payload.contextLines = realtimeFilter.contextLines;
+    }
+    wsSend(payload, tab);
     setTabStatus(tab || getActiveTab(), "打开实时流中...");
+    if (realtimeFilter) {
+      renderLogBuffer();
+    }
     syncStateToActiveTab();
   }
 
@@ -2571,27 +2628,35 @@
       notify("请输入实时监控关键字", "warn");
       return;
     }
+    const contextLines = getRealtimeDraftContextLines();
     const caseSensitive = getRealtimeDraftCaseSensitive();
     const changed = keyword !== (state.realtimeMonitorKeyword || "")
+      || contextLines !== normalizeRealtimeContextLines(state.realtimeMonitorContextLines)
       || caseSensitive !== !!state.realtimeMonitorCaseSensitive;
     state.realtimeMonitorKeyword = keyword;
     state.realtimeMonitorCaseSensitive = caseSensitive;
+    state.realtimeMonitorContextLines = contextLines;
     state.realtimeMonitorDirty = false;
     if (changed) {
       state.realtimeHits = [];
       state.realtimeSearchCursor = -1;
     }
     const tab = getActiveTab();
-    if (tab && (!tab.realtimeWanted || tab.pausedByIdle || !tab.wsConnected)) {
+    if (tab && (changed || !tab.realtimeWanted || tab.pausedByIdle || !tab.wsConnected)) {
       await resumeRealtimeView();
     }
     syncViewerHighlightWithMonitor();
   }
 
-  function stopRealtimeMonitor() {
+  async function stopRealtimeMonitor() {
     state.realtimeMonitorKeyword = "";
     state.realtimeMonitorCaseSensitive = false;
+    state.realtimeMonitorContextLines = 0;
     syncRealtimeMonitorDirtyFlag();
+    const tab = getActiveTab();
+    if (tab && tab.realtimeWanted) {
+      await resumeRealtimeView();
+    }
     syncViewerHighlightWithMonitor();
   }
 
@@ -2784,17 +2849,19 @@
   }
 
   function renderRealtimeSearchResults() {
-    const hits = getVisibleSearchHits("realtime");
-    const placeholder = state.realtimeMonitorKeyword ? "实时监控中，暂无命中" : "未开始监控";
-    renderSearchHitsList({
-      mode: "realtime",
-      container: els.realtimeSearchResults,
-      hits,
-      placeholder,
-      fallbackKeyword: state.realtimeMonitorKeyword,
-      caseSensitive: !!state.realtimeMonitorCaseSensitive,
-      timeRange: null
-    });
+    if (!els.realtimeSearchResults) return;
+    const activeKeyword = (state.realtimeMonitorKeyword || "").trim();
+    const contextLines = normalizeRealtimeContextLines(state.realtimeMonitorContextLines);
+    const title = activeKeyword ? "实时过滤已开启" : "未开始监控";
+    const hint = activeKeyword
+      ? `主日志区只显示关键词 "${escapeHtml(activeKeyword)}" 及前后 ${contextLines} 行。`
+      : "输入关键词后，主日志区会只展示实时过滤结果。";
+    els.realtimeSearchResults.innerHTML = `
+      <div class="search-empty-state">
+        <div class="search-empty-title">${title}</div>
+        <div class="search-empty-hint">${hint}</div>
+      </div>
+    `;
     syncStateToActiveTab();
   }
 
@@ -3390,7 +3457,7 @@
       els.realtimeApplyBtn.addEventListener("click", () => applyRealtimeMonitor().catch(showError));
     }
     if (els.realtimeStopBtn) {
-      els.realtimeStopBtn.addEventListener("click", stopRealtimeMonitor);
+      els.realtimeStopBtn.addEventListener("click", () => stopRealtimeMonitor().catch(showError));
     }
     if (els.realtimeClearBtn) {
       els.realtimeClearBtn.addEventListener("click", clearRealtimeHits);
@@ -3409,6 +3476,17 @@
         }
       });
       els.realtimeKeyword.addEventListener("input", () => {
+        markRealtimeMonitorDirty();
+      });
+    }
+    if (els.realtimeContextLines) {
+      els.realtimeContextLines.addEventListener("input", () => {
+        markRealtimeMonitorDirty();
+      });
+      els.realtimeContextLines.addEventListener("change", () => {
+        if (els.realtimeContextLines) {
+          els.realtimeContextLines.value = String(getRealtimeDraftContextLines());
+        }
         markRealtimeMonitorDirty();
       });
     }

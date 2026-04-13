@@ -13,8 +13,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class RemoteCommandLogServiceTest {
 
+    private final RecordingRemoteLogClient remoteLogClient = new RecordingRemoteLogClient();
     private final RemoteCommandLogService service = new RemoteCommandLogService(
-            new NoopRemoteLogClient(),
+            remoteLogClient,
             new PathGuard(),
             new AppProperties()
     );
@@ -62,18 +63,37 @@ class RemoteCommandLogServiceTest {
         assertThat(timestamp).isEqualTo("2026-03-02 04:00:00.084");
     }
 
-    private static class NoopRemoteLogClient implements RemoteLogClient {
+    @Test
+    void shouldTailSnapshotWithRealtimeGrepFilter() {
+        ServerConfig server = new ServerConfig();
+        server.setRootPath("/home/devops/deploy/backend");
+        remoteLogClient.stdout = "matched";
+
+        String text = service.tailLines(server, "/home/devops/deploy/backend/demo/project", "app.log", 200,
+                new com.example.logviewer.logs.infrastructure.TailFilterOptions("ERROR", false, 1));
+
+        assertThat(text).isEqualTo("matched");
+        assertThat(remoteLogClient.lastShellCommand)
+                .contains("tail -n 200 -- '/home/devops/deploy/backend/demo/project/logs/app.log' || true")
+                .contains("grep --line-buffered -i -C 1 --no-group-separator -F -- 'ERROR' || true");
+    }
+
+    private static class RecordingRemoteLogClient implements RemoteLogClient {
+        private String lastShellCommand;
+        private String stdout = "";
+
         @Override
         public void testConnection(ServerConfig server) {
         }
 
         @Override
         public RemoteCommandResult exec(ServerConfig server, String shellCommand, long timeoutMs) {
-            throw new UnsupportedOperationException();
+            lastShellCommand = shellCommand;
+            return new RemoteCommandResult(0, stdout, "");
         }
 
         @Override
-        public TailStreamHandle openTail(ServerConfig server, String filePath) {
+        public TailStreamHandle openTail(ServerConfig server, String filePath, com.example.logviewer.logs.infrastructure.TailFilterOptions filterOptions) {
             throw new UnsupportedOperationException();
         }
     }

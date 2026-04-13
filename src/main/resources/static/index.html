@@ -209,9 +209,11 @@
                   <input id="realtimeCaseSensitive" type="checkbox">
                   大小写敏感
                 </label>
-                <button id="realtimeClearBtn" class="btn-secondary" type="button">清空命中</button>
-                <button id="realtimePrevBtn" class="btn-icon btn-ghost" title="上一个实时命中" aria-label="上一个实时命中">↑</button>
-                <button id="realtimeNextBtn" class="btn-icon btn-ghost" title="下一个实时命中" aria-label="下一个实时命中">↓</button>
+                <label class="checkbox">
+                  前后文
+                  <input id="realtimeContextLines" type="number" min="0" max="20" step="1" value="0" style="width:64px;">
+                  行
+                </label>
               </div>
             </section>
           </section>
@@ -236,9 +238,8 @@
             </section>
             <section id="realtimeResultsPanel" class="search-results-panel" hidden>
               <div class="search-status-stack">
-                <div id="realtimeSearchNavInfo" class="muted small">未开始监控</div>
+                <div id="realtimeSearchNavInfo" class="muted small">实时模式只在主日志区显示过滤结果，不再生成右侧命中列表。</div>
                 <div id="realtimeSearchStatus" class="muted small"></div>
-                <div class="muted small">实时命中只看新到日志；点击命中可定位到当前缓冲或切进历史查看。</div>
                 <div id="realtimeSearchHint" class="search-draft-hint" hidden></div>
               </div>
               <div id="realtimeSearchResults" class="search-results"></div>
@@ -268,6 +269,6 @@
 
 <div id="toastContainer" class="toast-container"></div>
 
-<script src="/app.js?v=20260320a"></script>
+<script src="/app.js?v=20260411a"></script>
 </body>
 </html>

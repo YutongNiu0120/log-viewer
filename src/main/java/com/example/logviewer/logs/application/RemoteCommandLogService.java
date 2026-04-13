@@ -10,9 +10,11 @@ import com.example.logviewer.logs.domain.ProjectNode;
 import com.example.logviewer.logs.domain.SearchHit;
 import com.example.logviewer.logs.domain.SearchScope;
 import com.example.logviewer.logs.infrastructure.PathGuard;
+import com.example.logviewer.logs.infrastructure.RealtimeGrepCommandBuilder;
 import com.example.logviewer.logs.infrastructure.RemoteCommandResult;
 import com.example.logviewer.logs.infrastructure.RemoteLogClient;
 import com.example.logviewer.logs.infrastructure.ShellQuoter;
+import com.example.logviewer.logs.infrastructure.TailFilterOptions;
 import com.example.logviewer.serverconfig.domain.ServerConfig;
 import com.example.logviewer.shared.ApiException;
 import org.springframework.http.HttpStatus;
@@ -148,9 +150,13 @@ public class RemoteCommandLogService {
     }
 
     public String tailLines(ServerConfig server, String projectPath, String file, int lines) {
+        return tailLines(server, projectPath, file, lines, TailFilterOptions.none());
+    }
+
+    public String tailLines(ServerConfig server, String projectPath, String file, int lines, TailFilterOptions filterOptions) {
         String filePath = pathGuard.buildLogFilePath(server, projectPath, file);
         int lineCount = Math.max(1, Math.min(lines, 5000));
-        String cmd = "tail -n " + lineCount + " -- " + ShellQuoter.sq(filePath) + " || true";
+        String cmd = buildTailLinesCommand(filePath, lineCount, filterOptions);
         RemoteCommandResult result = remoteLogClient.exec(server, cmd, 20000L);
         if (result.exitCode() != 0 && isBlank(result.stdout())) {
             throw new ApiException(HttpStatus.BAD_GATEWAY, "REMOTE_READ_FAILED", trimErr(result));
@@ -465,6 +471,11 @@ public class RemoteCommandLogService {
             }
         }
         return new SearchFileResult(partial, hits);
+    }
+
+    private String buildTailLinesCommand(String filePath, int lineCount, TailFilterOptions filterOptions) {
+        String source = "tail -n " + lineCount + " -- " + ShellQuoter.sq(filePath) + " || true";
+        return RealtimeGrepCommandBuilder.wrap(source, filterOptions);
     }
 
     private String buildTimestampSearchCommand(String filePath,

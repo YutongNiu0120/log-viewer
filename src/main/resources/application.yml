@@ -8,11 +8,14 @@ app:
   realtime:
     rotation-check-interval-ms: 5000
     rotation-check-idle-threshold-ms: 5000
+    stale-stream-check-interval-ms: 10000
+    stale-stream-timeout-ms: 45000
     initial-tail-lines: 200
   search:
     max-files-per-search: 20
     max-scanned-bytes-per-search: 20971520
     max-hits-per-search: 200
+    max-context-lines: 5
     timeout-ms: 8000
 
 management:

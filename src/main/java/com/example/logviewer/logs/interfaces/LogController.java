@@ -6,6 +6,7 @@ import com.example.logviewer.logs.domain.SearchScope;
 import com.example.logviewer.logs.interfaces.dto.ReadChunkResponse;
 import com.example.logviewer.logs.interfaces.dto.SearchRequest;
 import com.example.logviewer.logs.interfaces.dto.SearchResponse;
+import com.example.logviewer.logs.infrastructure.TailFilterOptions;
 import com.example.logviewer.serverconfig.application.ServerConfigService;
 import com.example.logviewer.serverconfig.domain.ServerConfig;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -74,9 +75,19 @@ public class LogController {
     public Object tailLines(@RequestParam String serverId,
                             @RequestParam String projectPath,
                             @RequestParam String file,
-                            @RequestParam(defaultValue = "200") int lines) {
+                            @RequestParam(defaultValue = "200") int lines,
+                            @RequestParam(required = false) String keyword,
+                            @RequestParam(defaultValue = "false") boolean caseSensitive,
+                            @RequestParam(required = false) Integer contextLines) {
         ServerConfig server = serverConfigService.getServerOrThrow(serverId);
-        String text = remoteCommandLogService.tailLines(server, projectPath, file, lines);
+        int boundedContextLines = contextLines == null ? 0 : Math.max(0, Math.min(contextLines.intValue(), 20));
+        String text = remoteCommandLogService.tailLines(
+                server,
+                projectPath,
+                file,
+                lines,
+                new TailFilterOptions(keyword, caseSensitive, boundedContextLines)
+        );
         Map<String, Object> resp = new HashMap<String, Object>();
         resp.put("fileName", file);
         resp.put("text", text);
@@ -94,7 +105,10 @@ public class LogController {
                 request.getKeyword(),
                 request.getFile(),
                 request.getDate(),
+                request.getStartTime(),
+                request.getEndTime(),
                 request.isCaseSensitive(),
+                request.getContextLines(),
                 request.getMaxHits()
         );
         SearchResponse response = new SearchResponse();

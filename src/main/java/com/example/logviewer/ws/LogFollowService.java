@@ -7,6 +7,7 @@ import com.example.logviewer.logs.domain.LogFileOrdering;
 import com.example.logviewer.logs.domain.LogType;
 import com.example.logviewer.logs.infrastructure.PathGuard;
 import com.example.logviewer.logs.infrastructure.RemoteLogClient;
+import com.example.logviewer.logs.infrastructure.TailFilterOptions;
 import com.example.logviewer.logs.infrastructure.TailStreamHandle;
 import com.example.logviewer.serverconfig.application.ServerConfigService;
 import com.example.logviewer.serverconfig.domain.ServerConfig;
@@ -23,7 +24,9 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +37,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 @Service
 public class LogFollowService {
@@ -74,23 +78,34 @@ public class LogFollowService {
     }
 
     public void closeSessionStream(String wsSessionId) {
+        closeSessionStream(wsSessionId, "session_closed");
+    }
+
+    private void closeSessionStream(String wsSessionId, String reason) {
         ActiveStream active = activeStreams.remove(wsSessionId);
         if (active != null) {
-            active.close();
+            active.close(reason);
+        }
+    }
+
+    public void markSessionHeartbeat(String wsSessionId) {
+        ActiveStream active = activeStreams.get(wsSessionId);
+        if (active != null) {
+            active.touchHeartbeat();
         }
     }
 
     @PreDestroy
     public void shutdown() {
         for (ActiveStream stream : activeStreams.values()) {
-            stream.close();
+            stream.close("app_shutdown");
         }
         streamExecutor.shutdownNow();
         scheduler.shutdownNow();
     }
 
     private void openInternal(WebSocketSession ws, OpenStreamRequest req, String fileName) {
-        closeSessionStream(ws.getId());
+        closeSessionStream(ws.getId(), "reopen");
         sendStatus(ws, "connecting", null);
 
         ServerConfig server = serverConfigService.getServerOrThrow(req.serverId());
@@ -110,7 +125,8 @@ public class LogFollowService {
                 server,
                 projectPath,
                 logType,
-                target
+                target,
+                resolveTailFilterOptions(req)
         );
         activeStreams.put(ws.getId(), active);
 
@@ -118,7 +134,7 @@ public class LogFollowService {
                 ? appProperties.getRealtime().getInitialTailLines()
                 : Math.max(0, Math.min(req.tailLines().intValue(), 2000));
         if (initialTailLines > 0) {
-            String tailText = remoteCommandLogService.tailLines(server, projectPath, target.getFileName(), initialTailLines);
+            String tailText = remoteCommandLogService.tailLines(server, projectPath, target.getFileName(), initialTailLines, active.filterOptions);
             if (!isBlank(tailText)) {
                 sendLogLines(active, target.getFileName(), tailText);
             }
@@ -126,6 +142,7 @@ public class LogFollowService {
 
         startTail(active, false);
         scheduleRotationCheck(active);
+        scheduleStaleStreamCleanup(active, ws.getId());
         sendStatus(ws, "following", map("fileName", target.getFileName(), "streamId", active.streamId));
     }
 
@@ -140,18 +157,33 @@ public class LogFollowService {
     }
 
     private void startTail(final ActiveStream active, boolean onSwitch) {
+        String closeReason = onSwitch ? "file_switch" : "reopen";
         synchronized (active.lock) {
             if (active.closed) {
                 return;
             }
             if (active.tailHandle != null) {
-                active.tailHandle.close();
+                TailStreamHandle previousHandle = active.tailHandle;
+                active.tailHandle = null;
+                active.tailGeneration++;
+                closeHandle(previousHandle, active, closeReason);
             }
             String filePath = pathGuard.buildLogFilePath(active.server, active.projectPath, active.currentFile.getFileName());
-            active.tailHandle = remoteLogClient.openTail(active.server, filePath);
+            active.tailHandle = remoteLogClient.openTail(active.server, filePath, active.filterOptions);
+            active.tailGeneration++;
+            final long generation = active.tailGeneration;
+            active.realtimeFilter.reset();
+            log.info("opened realtime stream {} file={} generation={}",
+                    active.streamId, active.currentFile.getFileName(), generation);
             if (onSwitch) {
                 try {
-                    String backfill = remoteCommandLogService.tailLines(active.server, active.projectPath, active.currentFile.getFileName(), 100);
+                    String backfill = remoteCommandLogService.tailLines(
+                            active.server,
+                            active.projectPath,
+                            active.currentFile.getFileName(),
+                            100,
+                            active.filterOptions
+                    );
                     if (!isBlank(backfill)) {
                         sendLogLines(active, active.currentFile.getFileName(), backfill);
                     }
@@ -162,44 +194,44 @@ public class LogFollowService {
             streamExecutor.submit(new Runnable() {
                 @Override
                 public void run() {
-                    readTailLoop(active);
+                    readTailLoop(active, generation);
                 }
             });
         }
     }
 
-    private void readTailLoop(ActiveStream active) {
+    private void readTailLoop(ActiveStream active, long generation) {
         TailStreamHandle handle;
         synchronized (active.lock) {
             handle = active.tailHandle;
-            if (active.closed || handle == null) {
+            if (active.closed || handle == null || generation != active.tailGeneration) {
                 return;
             }
         }
         BufferedReader reader = null;
+        boolean shouldRestart = false;
         try {
             reader = new BufferedReader(new InputStreamReader(handle.stdout(), StandardCharsets.UTF_8));
             List<String> buffer = new ArrayList<String>(128);
-            while (!active.closed && active.ws.isOpen()) {
+            while (!active.closed && active.ws.isOpen() && generation == active.tailGeneration) {
                 String line = reader.readLine();
                 if (line == null) {
+                    shouldRestart = true;
                     break;
                 }
-                buffer.add(line);
+                buffer.addAll(active.realtimeFilter.accept(line));
                 // Flush immediately when stream is idle (better realtime feel on low-volume logs),
                 // while still batching bursts to reduce WS message overhead.
                 if (buffer.size() >= 50 || !reader.ready()) {
-                    sendLogLines(active, active.currentFile.getFileName(), joinLines(buffer));
-                    buffer.clear();
+                    flushBufferedLines(active, generation, buffer);
                 }
             }
-            if (!buffer.isEmpty()) {
-                sendLogLines(active, active.currentFile.getFileName(), joinLines(buffer));
-            }
+            flushBufferedLines(active, generation, buffer);
         } catch (Exception e) {
-            if (!active.closed) {
+            if (!active.closed && generation == active.tailGeneration) {
                 log.warn("tail read loop error for stream {}", active.streamId, e);
                 sendStatus(active.ws, "reconnecting", map("message", e.getMessage()));
+                shouldRestart = true;
             }
         } finally {
             if (reader != null) {
@@ -210,6 +242,29 @@ public class LogFollowService {
                 }
             }
         }
+        if (shouldRestart && !active.closed && active.ws.isOpen() && generation == active.tailGeneration) {
+            scheduleTailRestart(active, generation);
+        }
+    }
+
+    private void scheduleTailRestart(final ActiveStream active, final long failedGeneration) {
+        scheduler.schedule(new Runnable() {
+            @Override
+            public void run() {
+                if (active.closed || !active.ws.isOpen() || failedGeneration != active.tailGeneration) {
+                    return;
+                }
+                sendStatus(active.ws, "reconnecting", map("message", "tail stream ended"));
+                try {
+                    startTail(active, false);
+                } catch (Exception e) {
+                    log.warn("tail restart failed for stream {}", active.streamId, e);
+                    if (!active.closed && active.ws.isOpen() && failedGeneration == active.tailGeneration) {
+                        scheduleTailRestart(active, failedGeneration);
+                    }
+                }
+            }
+        }, 1000L, TimeUnit.MILLISECONDS);
     }
 
     private void scheduleRotationCheck(final ActiveStream active) {
@@ -252,6 +307,27 @@ public class LogFollowService {
             }
         }, interval, interval, TimeUnit.MILLISECONDS);
         active.rotationTask = future;
+    }
+
+    private void scheduleStaleStreamCleanup(final ActiveStream active, final String wsSessionId) {
+        final long interval = Math.max(5_000L, appProperties.getRealtime().getStaleStreamCheckIntervalMs());
+        final long timeoutMs = Math.max(interval, appProperties.getRealtime().getStaleStreamTimeoutMs());
+        ScheduledFuture<?> future = scheduler.scheduleAtFixedRate(new Runnable() {
+            @Override
+            public void run() {
+                if (active.closed) {
+                    return;
+                }
+                long idleMs = System.currentTimeMillis() - active.lastHeartbeatAtEpochMs;
+                if (idleMs < timeoutMs) {
+                    return;
+                }
+                log.info("closing stale realtime stream {} for ws session {} after {} ms without heartbeat",
+                        active.streamId, wsSessionId, idleMs);
+                closeSessionStream(wsSessionId, "stale_timeout");
+            }
+        }, interval, interval, TimeUnit.MILLISECONDS);
+        active.staleCleanupTask = future;
     }
 
     private boolean sameLogicalFile(LogFileMeta a, LogFileMeta b) {
@@ -337,6 +413,36 @@ public class LogFollowService {
         return s == null || s.trim().isEmpty();
     }
 
+    private TailFilterOptions resolveTailFilterOptions(OpenStreamRequest req) {
+        if (req == null || isBlank(req.keyword())) {
+            return TailFilterOptions.none();
+        }
+        int contextLines = req.contextLines() == null ? 0 : req.contextLines().intValue();
+        contextLines = Math.max(0, Math.min(contextLines, 20));
+        return new TailFilterOptions(req.keyword(), req.caseSensitive(), contextLines);
+    }
+
+    private static void closeHandle(TailStreamHandle handle, ActiveStream active, String reason) {
+        if (handle == null) {
+            return;
+        }
+        log.info("closing realtime stream {} reason={}", active.streamId, reason);
+        try {
+            handle.close();
+        } catch (Exception e) {
+            log.warn("close realtime tail failed stream={} reason={}", active.streamId, reason, e);
+        }
+    }
+
+    private void flushBufferedLines(ActiveStream active, long generation, List<String> buffer) {
+        if (buffer.isEmpty() || generation != active.tailGeneration) {
+            buffer.clear();
+            return;
+        }
+        sendLogLines(active, active.currentFile.getFileName(), joinLines(buffer));
+        buffer.clear();
+    }
+
     private Map<String, Object> map(Object... kv) {
         Map<String, Object> m = new LinkedHashMap<String, Object>();
         for (int i = 0; i + 1 < kv.length; i += 2) {
@@ -352,14 +458,21 @@ public class LogFollowService {
         private final String mode;
         private final String file;
         private final Integer tailLines;
+        private final String keyword;
+        private final boolean caseSensitive;
+        private final Integer contextLines;
 
-        public OpenStreamRequest(String serverId, String projectPath, String logType, String mode, String file, Integer tailLines) {
+        public OpenStreamRequest(String serverId, String projectPath, String logType, String mode, String file, Integer tailLines,
+                                 String keyword, boolean caseSensitive, Integer contextLines) {
             this.serverId = serverId;
             this.projectPath = projectPath;
             this.logType = logType;
             this.mode = mode;
             this.file = file;
             this.tailLines = tailLines;
+            this.keyword = keyword;
+            this.caseSensitive = caseSensitive;
+            this.contextLines = contextLines;
         }
 
         public String serverId() {
@@ -385,6 +498,18 @@ public class LogFollowService {
         public Integer tailLines() {
             return tailLines;
         }
+
+        public String keyword() {
+            return keyword;
+        }
+
+        public boolean caseSensitive() {
+            return caseSensitive;
+        }
+
+        public Integer contextLines() {
+            return contextLines;
+        }
     }
 
     private static class ActiveStream implements AutoCloseable {
@@ -393,31 +518,124 @@ public class LogFollowService {
         final ServerConfig server;
         final String projectPath;
         final LogType logType;
+        final TailFilterOptions filterOptions;
+        final RealtimeLineFilter realtimeFilter;
         final Object lock = new Object();
         volatile LogFileMeta currentFile;
         volatile TailStreamHandle tailHandle;
         volatile ScheduledFuture<?> rotationTask;
+        volatile ScheduledFuture<?> staleCleanupTask;
         volatile boolean closed;
+        volatile long tailGeneration;
         volatile long lastDataAtEpochMs = System.currentTimeMillis();
+        volatile long lastHeartbeatAtEpochMs = System.currentTimeMillis();
 
-        private ActiveStream(String streamId, WebSocketSession ws, ServerConfig server, String projectPath, LogType logType, LogFileMeta currentFile) {
+        private ActiveStream(String streamId, WebSocketSession ws, ServerConfig server, String projectPath, LogType logType,
+                             LogFileMeta currentFile, TailFilterOptions filterOptions) {
             this.streamId = streamId;
             this.ws = ws;
             this.server = server;
             this.projectPath = projectPath;
             this.logType = logType;
             this.currentFile = currentFile;
+            this.filterOptions = filterOptions == null ? TailFilterOptions.none() : filterOptions;
+            this.realtimeFilter = new RealtimeLineFilter(this.filterOptions);
         }
 
         @Override
         public void close() {
+            close("stream_closed");
+        }
+
+        private void close(String reason) {
+            TailStreamHandle handleToClose;
             closed = true;
             if (rotationTask != null) {
                 rotationTask.cancel(true);
             }
-            if (tailHandle != null) {
-                tailHandle.close();
+            if (staleCleanupTask != null) {
+                staleCleanupTask.cancel(true);
             }
+            synchronized (lock) {
+                handleToClose = tailHandle;
+                tailHandle = null;
+                tailGeneration++;
+            }
+            closeHandle(handleToClose, this, reason);
+        }
+
+        private void touchHeartbeat() {
+            lastHeartbeatAtEpochMs = System.currentTimeMillis();
+        }
+    }
+
+    static final class RealtimeLineFilter {
+        private final Pattern keywordPattern;
+        private final Deque<LineEntry> recentLines = new ArrayDeque<LineEntry>();
+        private final int contextLines;
+        private long nextSeq = 1L;
+        private long lastEmittedSeq = 0L;
+        private int pendingAfterLines;
+
+        RealtimeLineFilter(TailFilterOptions options) {
+            TailFilterOptions safeOptions = options == null ? TailFilterOptions.none() : options;
+            this.contextLines = safeOptions.hasKeyword() ? Math.max(0, safeOptions.contextLines()) : 0;
+            this.keywordPattern = safeOptions.hasKeyword()
+                    ? Pattern.compile(Pattern.quote(safeOptions.keyword()), safeOptions.caseSensitive() ? 0 : Pattern.CASE_INSENSITIVE)
+                    : null;
+        }
+
+        void reset() {
+            recentLines.clear();
+            nextSeq = 1L;
+            lastEmittedSeq = 0L;
+            pendingAfterLines = 0;
+        }
+
+        List<String> accept(String line) {
+            List<String> out = new ArrayList<String>();
+            String safeLine = line == null ? "" : line;
+            if (keywordPattern == null) {
+                out.add(safeLine);
+                return out;
+            }
+            long seq = nextSeq++;
+            boolean matched = keywordPattern.matcher(safeLine).find();
+            if (matched) {
+                for (LineEntry entry : recentLines) {
+                    if (entry.seq > lastEmittedSeq) {
+                        out.add(entry.text);
+                        lastEmittedSeq = entry.seq;
+                    }
+                }
+                if (seq > lastEmittedSeq) {
+                    out.add(safeLine);
+                    lastEmittedSeq = seq;
+                }
+                pendingAfterLines = Math.max(pendingAfterLines, contextLines);
+            } else if (pendingAfterLines > 0 && seq > lastEmittedSeq) {
+                out.add(safeLine);
+                lastEmittedSeq = seq;
+                pendingAfterLines--;
+            }
+
+            if (contextLines > 0) {
+                recentLines.addLast(new LineEntry(seq, safeLine));
+                while (recentLines.size() > contextLines) {
+                    recentLines.removeFirst();
+                }
+            }
+            return out;
+        }
+    }
+
+    static final class LineEntry {
+        final long seq;
+        final String text;
+
+        LineEntry(long seq, String text) {
+            this.seq = seq;
+            this.text = text;
         }
     }
 }

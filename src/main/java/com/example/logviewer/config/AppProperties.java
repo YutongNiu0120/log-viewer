@@ -54,6 +54,8 @@ public class AppProperties {
     public static class Realtime {
         private long rotationCheckIntervalMs = 5000L;
         private long rotationCheckIdleThresholdMs = 5000L;
+        private long staleStreamCheckIntervalMs = 30000L;
+        private long staleStreamTimeoutMs = 120000L;
         private int initialTailLines = 200;
 
         public long getRotationCheckIntervalMs() {
@@ -79,12 +81,29 @@ public class AppProperties {
         public void setRotationCheckIdleThresholdMs(long rotationCheckIdleThresholdMs) {
             this.rotationCheckIdleThresholdMs = rotationCheckIdleThresholdMs;
         }
+
+        public long getStaleStreamCheckIntervalMs() {
+            return staleStreamCheckIntervalMs;
+        }
+
+        public void setStaleStreamCheckIntervalMs(long staleStreamCheckIntervalMs) {
+            this.staleStreamCheckIntervalMs = staleStreamCheckIntervalMs;
+        }
+
+        public long getStaleStreamTimeoutMs() {
+            return staleStreamTimeoutMs;
+        }
+
+        public void setStaleStreamTimeoutMs(long staleStreamTimeoutMs) {
+            this.staleStreamTimeoutMs = staleStreamTimeoutMs;
+        }
     }
 
     public static class Search {
         private int maxFilesPerSearch = 200;
         private long maxScannedBytesPerSearch = 20 * 1024 * 1024L;
         private int maxHitsPerSearch = 500;
+        private int maxContextLines = 5;
         private long timeoutMs = 15_000L;
 
         public int getMaxFilesPerSearch() {
@@ -109,6 +128,14 @@ public class AppProperties {
 
         public void setMaxHitsPerSearch(int maxHitsPerSearch) {
             this.maxHitsPerSearch = maxHitsPerSearch;
+        }
+
+        public int getMaxContextLines() {
+            return maxContextLines;
+        }
+
+        public void setMaxContextLines(int maxContextLines) {
+            this.maxContextLines = maxContextLines;
         }
 
         public long getTimeoutMs() {

@@ -8,9 +8,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
@@ -18,12 +18,14 @@ import java.util.concurrent.TimeUnit;
 public class SshRemoteLogClient implements RemoteLogClient {
 
     private static final Logger log = LoggerFactory.getLogger(SshRemoteLogClient.class);
-
     @Override
     public void testConnection(ServerConfig server) {
-        RemoteCommandResult result = exec(server, "test -d " + ShellQuoter.sq(server.getRootPath()) + " && echo OK", 5_000L);
+        String root = LogPathExpression.hasWildcard(server.getRootPath())
+                ? LogPathExpression.staticRoot(server.getRootPath())
+                : server.getRootPath();
+        RemoteCommandResult result = exec(server, "test -d " + ShellQuoter.sq(root) + " && echo OK", 5_000L);
         if (!result.success()) {
-            throw new IllegalStateException("Remote root path not accessible: " + server.getRootPath());
+            throw new IllegalStateException("Remote root path not accessible: " + root);
         }
     }
 
@@ -53,44 +55,52 @@ public class SshRemoteLogClient implements RemoteLogClient {
     }
 
     @Override
-    public TailStreamHandle openTail(ServerConfig server, String filePath) {
-        String command = wrapBash("tail -n 0 -F -- " + ShellQuoter.sq(filePath), true);
+    public TailStreamHandle openTail(ServerConfig server, String filePath, TailFilterOptions filterOptions) {
+        String command = wrapTailCommand(filePath);
+        SSHClient ssh = null;
+        Session session = null;
+        Session.Command cmd = null;
         try {
-            SSHClient ssh = connect(server);
-            Session session = ssh.startSession();
-            Session.Command cmd = session.exec(command);
+            ssh = connect(server);
+            session = ssh.startSession();
+            session.allocateDefaultPTY();
+            cmd = session.exec(command);
+            final SSHClient openedSsh = ssh;
+            final Session openedSession = session;
+            final Session.Command openedCmd = cmd;
             return new TailStreamHandle() {
                 @Override
                 public InputStream stdout() {
-                    return cmd.getInputStream();
+                    return openedCmd.getInputStream();
                 }
 
                 @Override
                 public InputStream stderr() {
-                    return cmd.getErrorStream();
+                    return openedCmd.getErrorStream();
                 }
 
                 @Override
                 public void close() {
                     try {
-                        cmd.close();
+                        openedCmd.close();
                     } catch (Exception e) {
                         log.debug("close cmd error", e);
                     }
                     try {
-                        session.close();
+                        openedSession.close();
                     } catch (Exception e) {
                         log.debug("close session error", e);
                     }
                     try {
-                        ssh.disconnect();
-                        ssh.close();
+                        openedSsh.disconnect();
+                        openedSsh.close();
                     } catch (Exception e) {
                         log.debug("close ssh error", e);
                     }
                 }
             };
-        } catch (IOException e) {
+        } catch (Exception e) {
+            closeQuietly(cmd, session, ssh);
             throw new IllegalStateException("SSH tail open failed: " + e.getMessage(), e);
         }
     }
@@ -107,16 +117,63 @@ public class SshRemoteLogClient implements RemoteLogClient {
         if (!lowImpact) {
             return "bash -lc " + ShellQuoter.sq(shellCommand);
         }
-        String quoted = ShellQuoter.sq(shellCommand);
         String inner =
                 "if command -v ionice >/dev/null 2>&1 && command -v nice >/dev/null 2>&1; then\n" +
-                "  ionice -c3 nice -n 19 bash -lc " + quoted + "\n" +
+                "  ionice -c3 nice -n 19 bash -lc " + ShellQuoter.sq(shellCommand) + "\n" +
                 "elif command -v nice >/dev/null 2>&1; then\n" +
-                "  nice -n 19 bash -lc " + quoted + "\n" +
+                "  nice -n 19 bash -lc " + ShellQuoter.sq(shellCommand) + "\n" +
                 "else\n" +
-                "  bash -lc " + quoted + "\n" +
+                "  bash -lc " + ShellQuoter.sq(shellCommand) + "\n" +
                 "fi\n";
         return "bash -lc " + ShellQuoter.sq(inner);
+    }
+
+    private String wrapTailCommand(String filePath) {
+        String tailCommand = "tail -n 0 -F -- " + ShellQuoter.sq(filePath);
+        String inner =
+                "TAIL_PID=''\n" +
+                "cleanup() {\n" +
+                "  if [ -n \"$TAIL_PID\" ]; then\n" +
+                "    kill \"$TAIL_PID\" >/dev/null 2>&1 || true\n" +
+                "    wait \"$TAIL_PID\" >/dev/null 2>&1 || true\n" +
+                "  fi\n" +
+                "}\n" +
+                "trap cleanup EXIT HUP INT TERM\n" +
+                "if command -v ionice >/dev/null 2>&1 && command -v nice >/dev/null 2>&1; then\n" +
+                "  ionice -c3 nice -n 19 " + tailCommand + " &\n" +
+                "elif command -v nice >/dev/null 2>&1; then\n" +
+                "  nice -n 19 " + tailCommand + " &\n" +
+                "else\n" +
+                "  " + tailCommand + " &\n" +
+                "fi\n" +
+                "TAIL_PID=$!\n" +
+                "wait \"$TAIL_PID\"\n";
+        return "bash -lc " + ShellQuoter.sq(inner);
+    }
+
+    private void closeQuietly(Session.Command cmd, Session session, SSHClient ssh) {
+        if (cmd != null) {
+            try {
+                cmd.close();
+            } catch (Exception e) {
+                log.debug("close cmd error", e);
+            }
+        }
+        if (session != null) {
+            try {
+                session.close();
+            } catch (Exception e) {
+                log.debug("close session error", e);
+            }
+        }
+        if (ssh != null) {
+            try {
+                ssh.disconnect();
+                ssh.close();
+            } catch (Exception e) {
+                log.debug("close ssh error", e);
+            }
+        }
     }
 
     private String readStream(InputStream inputStream) throws IOException {
@@ -128,4 +185,5 @@ public class SshRemoteLogClient implements RemoteLogClient {
         }
         return new String(out.toByteArray(), StandardCharsets.UTF_8);
     }
+
 }

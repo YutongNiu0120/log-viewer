@@ -6,9 +6,12 @@ import java.util.List;
 public class SearchHit {
     private String fileName;
     private String date;
+    private String timestamp;
     private Long lineNumber;
     private Long offset;
     private String lineText;
+    private List<String> beforeContext = new ArrayList<>();
+    private List<String> afterContext = new ArrayList<>();
     private List<int[]> matchRanges = new ArrayList<>();
 
     public String getFileName() {
@@ -25,6 +28,14 @@ public class SearchHit {
 
     public void setDate(String date) {
         this.date = date;
+    }
+
+    public String getTimestamp() {
+        return timestamp;
+    }
+
+    public void setTimestamp(String timestamp) {
+        this.timestamp = timestamp;
     }
 
     public Long getLineNumber() {
@@ -49,6 +60,22 @@ public class SearchHit {
 
     public void setLineText(String lineText) {
         this.lineText = lineText;
+    }
+
+    public List<String> getBeforeContext() {
+        return beforeContext;
+    }
+
+    public void setBeforeContext(List<String> beforeContext) {
+        this.beforeContext = beforeContext;
+    }
+
+    public List<String> getAfterContext() {
+        return afterContext;
+    }
+
+    public void setAfterContext(List<String> afterContext) {
+        this.afterContext = afterContext;
     }
 
     public List<int[]> getMatchRanges() {

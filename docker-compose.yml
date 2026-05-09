@@ -1,6 +1,7 @@
 services:
   log-viewer:
     build: .
+    restart: always
     ports:
       - "38180:38180"
     environment:

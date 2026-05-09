@@ -28,4 +28,14 @@ class PathGuardTest {
         assertThrows(RuntimeException.class,
                 () -> pathGuard.validateFileName("../a.log"));
     }
+
+    @Test
+    void shouldAllowAnyDepthProjectPathWhenRootUsesLogExpression() {
+        ServerConfig server = new ServerConfig();
+        server.setRootPath("/home/devops/deploy/**/logs/*");
+
+        String path = pathGuard.validateProjectPath(server, "/home/devops/deploy/backend/onedata/lot-manager-app");
+
+        assertEquals("/home/devops/deploy/backend/onedata/lot-manager-app", path);
+    }
 }

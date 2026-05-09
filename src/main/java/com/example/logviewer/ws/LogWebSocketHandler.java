@@ -38,7 +38,10 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                     root.path("logType").asText("normal"),
                     root.path("mode").asText("latest"),
                     root.has("file") && !root.path("file").isNull() ? root.path("file").asText() : null,
-                    root.has("tailLines") ? Integer.valueOf(root.path("tailLines").asInt()) : null
+                    root.has("tailLines") ? Integer.valueOf(root.path("tailLines").asInt()) : null,
+                    root.has("keyword") && !root.path("keyword").isNull() ? root.path("keyword").asText() : null,
+                    root.has("caseSensitive") && root.path("caseSensitive").asBoolean(),
+                    root.has("contextLines") ? Integer.valueOf(root.path("contextLines").asInt()) : null
             );
             if ("latest".equalsIgnoreCase(req.mode())) {
                 logFollowService.openLatest(session, req);
@@ -55,7 +58,10 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                     root.path("logType").asText("normal"),
                     "file",
                     root.path("file").asText(),
-                    root.has("tailLines") ? Integer.valueOf(root.path("tailLines").asInt()) : null
+                    root.has("tailLines") ? Integer.valueOf(root.path("tailLines").asInt()) : null,
+                    root.has("keyword") && !root.path("keyword").isNull() ? root.path("keyword").asText() : null,
+                    root.has("caseSensitive") && root.path("caseSensitive").asBoolean(),
+                    root.has("contextLines") ? Integer.valueOf(root.path("contextLines").asInt()) : null
             );
             logFollowService.openSpecificFile(session, req, req.file());
             return;
@@ -67,6 +73,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
         }
 
         if ("ping".equals(type)) {
+            logFollowService.markSessionHeartbeat(session.getId());
             logFollowService.sendMessage(session, map("type", "pong"));
             return;
         }

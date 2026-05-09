@@ -7,5 +7,9 @@ public interface RemoteLogClient {
 
     RemoteCommandResult exec(ServerConfig server, String shellCommand, long timeoutMs);
 
-    TailStreamHandle openTail(ServerConfig server, String filePath);
+    default TailStreamHandle openTail(ServerConfig server, String filePath) {
+        return openTail(server, filePath, TailFilterOptions.none());
+    }
+
+    TailStreamHandle openTail(ServerConfig server, String filePath, TailFilterOptions filterOptions);
 }

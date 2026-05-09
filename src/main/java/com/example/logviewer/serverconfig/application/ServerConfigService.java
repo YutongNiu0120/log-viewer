@@ -125,7 +125,7 @@ public class ServerConfigService {
                 server.setName(isBlank(server.getHost()) ? id : server.getHost());
             }
             if (isBlank(server.getRootPath())) {
-                server.setRootPath("/home/devops/deploy/backend");
+                server.setRootPath("/home/devops/deploy/**/logs/*");
             }
         }
         if (config.getServers().isEmpty()) {

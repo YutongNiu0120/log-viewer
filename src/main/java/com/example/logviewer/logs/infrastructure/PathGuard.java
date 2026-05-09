@@ -12,15 +12,17 @@ import java.util.List;
 public class PathGuard {
 
     public String validateProjectPath(ServerConfig server, String projectPath) {
-        String normalizedRoot = normalize(server.getRootPath());
+        String normalizedRoot = normalizeRootBase(server.getRootPath());
         String normalizedProject = normalize(projectPath);
         if (!normalizedProject.startsWith(normalizedRoot + "/")) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PATH", "projectPath outside root");
         }
-        String relative = normalizedProject.substring(normalizedRoot.length() + 1);
-        String[] parts = relative.split("/");
-        if (parts.length != 2) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PATH", "projectPath must be root/<l1>/<l2>");
+        if (!LogPathExpression.hasWildcard(server.getRootPath())) {
+            String relative = normalizedProject.substring(normalizedRoot.length() + 1);
+            String[] parts = relative.split("/");
+            if (parts.length != 2) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PATH", "projectPath must be root/<l1>/<l2>");
+            }
         }
         return normalizedProject;
     }
@@ -46,6 +48,10 @@ public class PathGuard {
 
     public String buildLogFilePath(ServerConfig server, String projectPath, String fileName) {
         return buildLogsPath(server, projectPath) + "/" + validateFileName(fileName);
+    }
+
+    public String normalizeRootBase(String rootPath) {
+        return normalize(LogPathExpression.staticRoot(rootPath));
     }
 
     public String normalize(String path) {

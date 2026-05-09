@@ -27,8 +27,15 @@ class SshRemoteLogClientTest {
         String wrapped = (String) method.invoke(client, "/tmp/app.log");
 
         assertTrue(!wrapped.contains("__LOG_VIEWER_TAIL_META__"));
-        assertTrue(!wrapped.contains("TAIL_PID="));
-        assertTrue(!wrapped.contains("kill -- -"));
-        assertTrue(wrapped.contains("exec tail -n 0 -F -- "));
+        assertTrue(wrapped.contains("TAIL_PID="));
+        assertTrue(wrapped.contains("TAIL_PID=$!"));
+        assertTrue(wrapped.contains("trap cleanup EXIT HUP INT TERM"));
+        assertTrue(wrapped.contains("kill \"$TAIL_PID\" >/dev/null 2>&1 || true"));
+        assertTrue(wrapped.contains("wait \"$TAIL_PID\""));
+        assertTrue(!wrapped.contains("ionice -c3 nice -n 19 bash -lc "));
+        assertTrue(!wrapped.contains("nice -n 19 bash -lc "));
+        assertTrue(wrapped.contains("ionice -c3 nice -n 19 tail -n 0 -F -- ")
+                || wrapped.contains("nice -n 19 tail -n 0 -F -- ")
+                || wrapped.contains("tail -n 0 -F -- "));
     }
 }

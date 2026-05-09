@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Log Viewer</title>
-  <link rel="stylesheet" href="/styles.css?v=20260320a">
+  <link rel="stylesheet" href="/styles.css?v=20260429a">
 </head>
 <body>
 <div class="app-shell">
@@ -144,6 +144,12 @@
                   <button id="searchBtn" class="btn-primary search-submit-btn" title="搜索历史" aria-label="搜索历史">搜索</button>
                 </div>
               </div>
+              <div class="drawer-field">
+                <div class="field-label">最近搜索</div>
+                <select id="searchRecentSelect">
+                  <option value="">暂无最近搜索</option>
+                </select>
+              </div>
               <div class="drawer-field drawer-field-inline drawer-field-compact">
                 <div class="field-label inline-label">快捷关键词：</div>
                 <div class="row row-wrap search-presets">
@@ -160,6 +166,11 @@
                   <span class="search-date-separator" aria-hidden="true">至</span>
                   <input id="searchDateEnd" class="search-date-input" type="time" step="1" aria-label="结束时间">
                   <button id="searchDateCurrentBtn" class="btn-secondary search-date-current-btn" type="button">清空</button>
+                </div>
+                <div class="row row-wrap search-time-presets">
+                  <button type="button" class="btn-ghost search-time-preset-btn" data-search-time-preset="15m">近15分钟</button>
+                  <button type="button" class="btn-ghost search-time-preset-btn" data-search-time-preset="1h">近1小时</button>
+                  <button type="button" class="btn-ghost search-time-preset-btn" data-search-time-preset="4h">近4小时</button>
                 </div>
                 <div id="searchDateRangeHint" class="muted small search-date-range-hint" hidden></div>
               </div>
@@ -184,6 +195,11 @@
                 <label class="checkbox">
                   <input id="caseSensitive" type="checkbox">
                   大小写敏感
+                </label>
+                <label class="checkbox">
+                  前后文
+                  <input id="searchContextLines" type="number" min="0" max="5" step="1" value="2" style="width:64px;">
+                  行
                 </label>
                 <button id="searchResetBtn" class="btn-secondary" type="button">重置</button>
                 <button id="searchPrevBtn" class="btn-icon btn-ghost" type="button" title="上一个命中" aria-label="上一个命中" hidden aria-hidden="true">↑</button>
@@ -269,6 +285,6 @@
 
 <div id="toastContainer" class="toast-container"></div>
 
-<script src="/app.js?v=20260411a"></script>
+<script src="/app.js?v=20260429a"></script>
 </body>
 </html>

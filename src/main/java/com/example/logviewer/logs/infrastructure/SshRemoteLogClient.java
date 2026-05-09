@@ -20,9 +20,12 @@ public class SshRemoteLogClient implements RemoteLogClient {
     private static final Logger log = LoggerFactory.getLogger(SshRemoteLogClient.class);
     @Override
     public void testConnection(ServerConfig server) {
-        RemoteCommandResult result = exec(server, "test -d " + ShellQuoter.sq(server.getRootPath()) + " && echo OK", 5_000L);
+        String root = LogPathExpression.hasWildcard(server.getRootPath())
+                ? LogPathExpression.staticRoot(server.getRootPath())
+                : server.getRootPath();
+        RemoteCommandResult result = exec(server, "test -d " + ShellQuoter.sq(root) + " && echo OK", 5_000L);
         if (!result.success()) {
-            throw new IllegalStateException("Remote root path not accessible: " + server.getRootPath());
+            throw new IllegalStateException("Remote root path not accessible: " + root);
         }
     }
 
@@ -60,6 +63,7 @@ public class SshRemoteLogClient implements RemoteLogClient {
         try {
             ssh = connect(server);
             session = ssh.startSession();
+            session.allocateDefaultPTY();
             cmd = session.exec(command);
             final SSHClient openedSsh = ssh;
             final Session openedSession = session;
@@ -125,7 +129,26 @@ public class SshRemoteLogClient implements RemoteLogClient {
     }
 
     private String wrapTailCommand(String filePath) {
-        return wrapBash("exec tail -n 0 -F -- " + ShellQuoter.sq(filePath), true);
+        String tailCommand = "tail -n 0 -F -- " + ShellQuoter.sq(filePath);
+        String inner =
+                "TAIL_PID=''\n" +
+                "cleanup() {\n" +
+                "  if [ -n \"$TAIL_PID\" ]; then\n" +
+                "    kill \"$TAIL_PID\" >/dev/null 2>&1 || true\n" +
+                "    wait \"$TAIL_PID\" >/dev/null 2>&1 || true\n" +
+                "  fi\n" +
+                "}\n" +
+                "trap cleanup EXIT HUP INT TERM\n" +
+                "if command -v ionice >/dev/null 2>&1 && command -v nice >/dev/null 2>&1; then\n" +
+                "  ionice -c3 nice -n 19 " + tailCommand + " &\n" +
+                "elif command -v nice >/dev/null 2>&1; then\n" +
+                "  nice -n 19 " + tailCommand + " &\n" +
+                "else\n" +
+                "  " + tailCommand + " &\n" +
+                "fi\n" +
+                "TAIL_PID=$!\n" +
+                "wait \"$TAIL_PID\"\n";
+        return "bash -lc " + ShellQuoter.sq(inner);
     }
 
     private void closeQuietly(Session.Command cmd, Session session, SSHClient ssh) {

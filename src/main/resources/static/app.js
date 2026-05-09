@@ -3,6 +3,7 @@
   const LEGACY_STARRED_PROJECTS_KEY = "logViewer.starredProjects";
   const LEGACY_STARRED_PROJECTS_MIGRATED_KEY = "logViewer.starredProjectsMigratedServerId";
   const LOG_FONT_SIZE_KEY = "logViewer.fontSizePx";
+  const SEARCH_HISTORY_KEY = "logViewer.searchHistory";
   const FILTER_DRAWER_COLLAPSED_KEY = "logViewer.filterDrawerCollapsed";
   const SIDEBAR_WIDTH_KEY = "logViewer.sidebarWidthPx";
   const SELECTED_SERVER_ID_KEY = "logViewer.selectedServerId";
@@ -14,6 +15,9 @@
   const TAB_IDLE_CHECK_MS = 60 * 1000;
   const WS_HEARTBEAT_MS = 30 * 1000;
   const REALTIME_HIT_LIMIT = 120;
+  const MAX_SEARCH_HISTORY = 10;
+  const WS_RECONNECT_BASE_MS = 1200;
+  const WS_RECONNECT_MAX_MS = 10000;
 
   const state = {
     bootstrap: null,
@@ -59,12 +63,17 @@
     lastHistorySearchEndTime: "",
     searchDateRangeDirty: false,
     historySearchDirty: false,
+    activeSearchRequestId: 0,
     realtimeMonitorKeyword: "",
     realtimeMonitorCaseSensitive: false,
     realtimeMonitorContextLines: 0,
     realtimeMonitorDirty: false,
     searchPanelMode: "history",
     logBuffer: "",
+    renderedLogBuffer: "",
+    pendingLogRender: null,
+    pendingFollowAfterRender: false,
+    pendingForceLogRender: false,
     lastViewerScrollTop: 0,
     focusLineText: "",
     viewerHighlightKeyword: "",
@@ -116,6 +125,7 @@
     searchDateRangeHint: $("searchDateRangeHint"),
     historySearchDirtyHint: $("historySearchDirtyHint"),
     searchContextLines: $("searchContextLines"),
+    searchRecentSelect: $("searchRecentSelect"),
     caseSensitive: $("caseSensitive"),
     searchBtn: $("searchBtn"),
     searchPrevBtn: $("searchPrevBtn"),
@@ -155,7 +165,8 @@
     drawerHead: document.querySelector(".drawer-head"),
     drawerToggleBtn: $("drawerToggleBtn"),
     realtimeSwitch: $("realtimeSwitch"),
-    searchPresetButtons: Array.from(document.querySelectorAll(".search-preset-btn[data-search-preset]"))
+    searchPresetButtons: Array.from(document.querySelectorAll(".search-preset-btn[data-search-preset]")),
+    searchTimePresetButtons: Array.from(document.querySelectorAll(".search-time-preset-btn[data-search-time-preset]"))
   };
 
   function setStatus(text, kind = "normal") {
@@ -231,6 +242,109 @@
       btn.classList.toggle("active", !!keyword && preset === keyword);
       btn.setAttribute("aria-pressed", preset === keyword ? "true" : "false");
     });
+  }
+
+  function loadSearchHistory() {
+    try {
+      const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((item) => item && (item.keyword || item.startTime || item.endTime)) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function persistSearchHistory(items) {
+    try {
+      localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(items.slice(0, MAX_SEARCH_HISTORY)));
+    } catch {
+      // Ignore storage quota or private-mode failures.
+    }
+  }
+
+  function searchHistoryKey(item) {
+    return [
+      item.keyword || "",
+      item.scope || "currentFile",
+      item.logType || "normal",
+      item.caseSensitive ? "1" : "0",
+      item.startTime || "",
+      item.endTime || ""
+    ].join("\u001f");
+  }
+
+  function searchHistoryLabel(item) {
+    const parts = [];
+    if (item.keyword) parts.push(item.keyword);
+    if (item.startTime || item.endTime) parts.push(`${item.startTime || "--:--"}-${item.endTime || "--:--"}`);
+    parts.push(item.scope === "all" ? "全部文件" : "当前文件");
+    if (item.caseSensitive) parts.push("Aa");
+    return parts.join(" · ");
+  }
+
+  function renderSearchHistorySelect() {
+    if (!els.searchRecentSelect) return;
+    const history = loadSearchHistory();
+    els.searchRecentSelect.innerHTML = "";
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = history.length ? "选择最近搜索..." : "暂无最近搜索";
+    els.searchRecentSelect.appendChild(empty);
+    history.forEach((item, idx) => {
+      const opt = document.createElement("option");
+      opt.value = String(idx);
+      opt.textContent = searchHistoryLabel(item);
+      els.searchRecentSelect.appendChild(opt);
+    });
+  }
+
+  function saveSearchHistoryEntry(entry) {
+    const normalized = {
+      keyword: String(entry.keyword || "").trim(),
+      scope: normalizeSearchScope(entry.scope || "currentFile"),
+      logType: entry.logType === "error" ? "error" : "normal",
+      caseSensitive: !!entry.caseSensitive,
+      startTime: entry.startTime || "",
+      endTime: entry.endTime || "",
+      savedAt: Date.now()
+    };
+    if (!normalized.keyword && !normalized.startTime && !normalized.endTime) return;
+    const history = loadSearchHistory();
+    const key = searchHistoryKey(normalized);
+    const next = [normalized, ...history.filter((item) => searchHistoryKey(item) !== key)];
+    persistSearchHistory(next);
+    renderSearchHistorySelect();
+  }
+
+  function applySearchHistoryEntry(indexValue) {
+    const idx = Number(indexValue);
+    const history = loadSearchHistory();
+    if (!Number.isInteger(idx) || idx < 0 || idx >= history.length) return;
+    const item = history[idx];
+    if (els.searchKeyword) els.searchKeyword.value = item.keyword || "";
+    if (els.searchScope) els.searchScope.value = normalizeSearchScope(item.scope || "currentFile");
+    if (els.caseSensitive) els.caseSensitive.checked = !!item.caseSensitive;
+    if (els.searchDateStart) els.searchDateStart.value = item.startTime || "";
+    if (els.searchDateEnd) els.searchDateEnd.value = item.endTime || "";
+    state.searchDateRangeDirty = !!(item.startTime || item.endTime);
+    syncSearchScopeButtons();
+    syncSearchPresetButtons();
+    updateSearchDateRangeUI();
+    markHistorySearchDirty();
+  }
+
+  function applySearchTimePreset(value) {
+    const now = new Date();
+    const minutes = value === "4h" ? 240 : (value === "1h" ? 60 : 15);
+    const start = new Date(now.getTime() - minutes * 60 * 1000);
+    const format = (d) => [d.getHours(), d.getMinutes(), d.getSeconds()]
+      .map((n) => String(n).padStart(2, "0"))
+      .join(":");
+    if (els.searchDateStart) els.searchDateStart.value = format(start);
+    if (els.searchDateEnd) els.searchDateEnd.value = format(now);
+    state.searchDateRangeDirty = true;
+    updateSearchDateRangeUI();
+    markHistorySearchDirty();
   }
 
   function getVisibleTabs() {
@@ -309,6 +423,11 @@
         btn.disabled = !hasProject;
       });
     }
+    if (Array.isArray(els.searchTimePresetButtons)) {
+      els.searchTimePresetButtons.forEach((btn) => {
+        btn.disabled = !hasProject;
+      });
+    }
     syncSearchScopeButtons();
     syncSearchPresetButtons();
     updateSearchDateRangeUI();
@@ -380,6 +499,7 @@
       lastHistorySearchCaseSensitive: false,
       lastHistorySearchStartTime: "",
       lastHistorySearchEndTime: "",
+      activeSearchRequestId: 0,
       searchKeywordInput: "",
       searchScopeValue: "currentFile",
       searchDateStartValue: "",
@@ -400,6 +520,11 @@
       nextRealtimeHitSeq: 1,
       ws: null,
       wsConnected: false,
+      wsReconnectTimer: null,
+      wsReconnectAttempts: 0,
+      wsClosing: false,
+      lastOpenStreamPayload: null,
+      currentStreamId: null,
       realtimeWanted: false,
       pausedByIdle: false,
       lastRealtimeMode: "latest",
@@ -457,6 +582,7 @@
     tab.lastHistorySearchCaseSensitive = !!state.lastHistorySearchCaseSensitive;
     tab.lastHistorySearchStartTime = state.lastHistorySearchStartTime || "";
     tab.lastHistorySearchEndTime = state.lastHistorySearchEndTime || "";
+    tab.activeSearchRequestId = state.activeSearchRequestId || tab.activeSearchRequestId || 0;
     tab.searchKeywordInput = els.searchKeyword ? els.searchKeyword.value : "";
     tab.searchScopeValue = normalizeSearchScope(els.searchScope ? els.searchScope.value : "currentFile");
     tab.searchDateStartValue = els.searchDateStart ? els.searchDateStart.value : "";
@@ -507,6 +633,7 @@
     state.lastHistorySearchCaseSensitive = !!tab.lastHistorySearchCaseSensitive;
     state.lastHistorySearchStartTime = tab.lastHistorySearchStartTime || "";
     state.lastHistorySearchEndTime = tab.lastHistorySearchEndTime || "";
+    state.activeSearchRequestId = tab.activeSearchRequestId || 0;
     state.searchDateRangeDirty = !!tab.searchDateRangeDirty;
     state.historySearchDirty = !!tab.historySearchDirty;
     state.realtimeMonitorKeyword = tab.realtimeMonitorKeyword || "";
@@ -514,6 +641,10 @@
     state.realtimeMonitorContextLines = normalizeRealtimeContextLines(tab.realtimeMonitorContextLines);
     state.realtimeMonitorDirty = !!tab.realtimeMonitorDirty;
     state.searchPanelMode = tab.searchPanelMode === "realtime" ? "realtime" : "history";
+    state.renderedLogBuffer = "";
+    state.pendingLogRender = null;
+    state.pendingFollowAfterRender = false;
+    state.pendingForceLogRender = false;
     state.ws = tab.ws || null;
     state.wsConnected = !!tab.wsConnected;
     if (els.searchKeyword) els.searchKeyword.value = tab.searchKeywordInput || "";
@@ -664,9 +795,13 @@
     els.currentProjectLabel.textContent = project.projectPath;
     syncStateToActiveTab();
     renderProjectTree();
-    await loadFiles();
+    const ctx = captureActiveTabContext(tab);
+    const loadResult = await loadFiles({ tab });
+    if (ctx && !isActiveTabContext(ctx)) {
+      return;
+    }
     const fileStillExists = !!(previousFileName && state.files.some((f) => f.fileName === previousFileName));
-    if (state.files.length && (createdNew || !hadCurrentFile || !fileStillExists)) {
+    if ((loadResult ? loadResult.files : state.files).length && (createdNew || !hadCurrentFile || !fileStillExists)) {
       await openLatestRealtime();
     }
   }
@@ -754,13 +889,40 @@
   }
 
   function appendTextToTabBuffer(tab, text, trimHead = true) {
-    if (!tab || !text) return;
-    tab.logBuffer = trimTextBuffer((tab.logBuffer || "") + text, trimHead);
+    if (!tab || !text) return false;
+    const raw = (tab.logBuffer || "") + text;
+    tab.logBuffer = trimTextBuffer(raw, trimHead);
+    return tab.logBuffer.length !== raw.length;
   }
 
   function prependTextToTabBuffer(tab, text) {
     if (!tab || !text) return;
     tab.logBuffer = trimTextBuffer(text + (tab.logBuffer || ""), false);
+  }
+
+  function captureActiveTabContext(tab = getActiveTab()) {
+    if (!tab) return null;
+    return {
+      tab,
+      tabId: tab.id,
+      serverId: tab.serverId || state.serverId,
+      projectPath: tab.projectPath || state.projectPath,
+      logType: tab.logType || state.logType
+    };
+  }
+
+  function isActiveTabContext(ctx) {
+    const active = getActiveTab();
+    return !!ctx
+      && !!active
+      && active.id === ctx.tabId
+      && state.serverId === ctx.serverId
+      && state.projectPath === ctx.projectPath
+      && state.logType === ctx.logType;
+  }
+
+  function isTabStillPresent(tab) {
+    return !!tab && state.tabs.some((t) => t.id === tab.id);
   }
 
   function collectRealtimeHitsForTab(tab, lines, fileName) {
@@ -850,6 +1012,29 @@
     }, WS_HEARTBEAT_MS);
   }
 
+  function clearTabReconnectTimer(tab) {
+    if (!tab || !tab.wsReconnectTimer) return;
+    clearTimeout(tab.wsReconnectTimer);
+    tab.wsReconnectTimer = null;
+  }
+
+  function scheduleTabReconnect(tab) {
+    if (!tab || !isTabStillPresent(tab)) return;
+    if (!tab.realtimeWanted || tab.pausedByIdle || !tab.lastOpenStreamPayload) return;
+    if (tab.wsReconnectTimer) return;
+    const attempts = Math.max(0, tab.wsReconnectAttempts || 0);
+    const delay = Math.min(WS_RECONNECT_MAX_MS, WS_RECONNECT_BASE_MS * Math.pow(2, attempts));
+    tab.wsReconnectAttempts = attempts + 1;
+    setTabStatus(tab, `实时重连中（${Math.round(delay / 1000)}s）`);
+    tab.wsReconnectTimer = setTimeout(() => {
+      tab.wsReconnectTimer = null;
+      if (!tab.realtimeWanted || tab.pausedByIdle || !tab.lastOpenStreamPayload || !isTabStillPresent(tab)) {
+        return;
+      }
+      wsSend({ ...tab.lastOpenStreamPayload }, tab);
+    }, delay);
+  }
+
   async function resumeTabRealtime(tab) {
     if (!tab || !tab.realtimeWanted) return;
     tab.pausedByIdle = false;
@@ -862,9 +1047,19 @@
     }
   }
 
+  function shutdownAllRealtimeSockets(markDesiredOff) {
+    for (const tab of state.tabs) {
+      if (tab && tab.ws) {
+        shutdownTabSocket(tab, markDesiredOff);
+      }
+    }
+  }
+
   function shutdownTabSocket(tab, markDesiredOff) {
     if (!tab) return;
+    clearTabReconnectTimer(tab);
     const ws = tab.ws;
+    tab.wsClosing = true;
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
       try {
         if (ws.readyState === WebSocket.OPEN) {
@@ -881,9 +1076,11 @@
     }
     tab.ws = null;
     tab.wsConnected = false;
+    tab.currentStreamId = null;
     if (markDesiredOff) {
       tab.realtimeWanted = false;
       tab.pausedByIdle = false;
+      tab.lastOpenStreamPayload = null;
     }
     if (tab.id === state.activeTabId) {
       state.ws = null;
@@ -1758,7 +1955,7 @@
       host: (server && server.host) ? server.host : "",
       port: (server && Number(server.port) > 0) ? Number(server.port) : 22,
       username: (server && server.username) ? server.username : "",
-      rootPath: (server && server.rootPath) ? server.rootPath : "/home/devops/deploy/backend",
+      rootPath: (server && server.rootPath) ? server.rootPath : "/home/devops/deploy/**/logs/*",
       keepMaskedPassword: keepMasked
     };
   }
@@ -1799,8 +1996,8 @@
           <input type="password" class="cfg-password" value="${passwordValue}" autocomplete="new-password">
         </label>
         <label class="server-form-field full">
-          <span>Root Path</span>
-          <input type="text" class="cfg-root-path" value="${escapeHtml(data.rootPath)}" placeholder="/home/devops/deploy/backend">
+          <span>日志路径表达式</span>
+          <input type="text" class="cfg-root-path" value="${escapeHtml(data.rootPath)}" placeholder="/home/devops/deploy/**/logs/*">
         </label>
       </div>
     `;
@@ -2006,7 +2203,7 @@
     }
     els.projectTree.innerHTML = "";
     if (groups.size === 0 && starred.length === 0) {
-      els.projectTree.innerHTML = `<div class="muted small">没有匹配项目。请检查 rootPath 是否为 /home/devops/deploy/backend、账号是否有读取权限、以及目录是否是两层结构。</div>`;
+      els.projectTree.innerHTML = `<div class="muted small">没有匹配项目。请检查日志路径表达式（例如 /home/devops/deploy/**/logs/*）、账号读取权限和日志文件命名。</div>`;
       return;
     }
     if (starred.length > 0) {
@@ -2199,6 +2396,8 @@
   async function loadFiles(options = {}) {
     if (!state.serverId || !state.projectPath) return;
     const opts = options || {};
+    const tab = opts.tab || getActiveTab();
+    const ctx = captureActiveTabContext(tab);
     const silent = !!opts.silent;
     const preferredFile = opts.preferredFile || null;
     if (!silent) {
@@ -2210,7 +2409,24 @@
       type: state.logType
     });
     const resp = await api(`/api/logs/files?${qs.toString()}`);
-    state.files = asArray(resp);
+    const files = asArray(resp);
+    if (ctx && !isActiveTabContext(ctx)) {
+      if (isTabStillPresent(ctx.tab)
+          && ctx.tab.serverId === ctx.serverId
+          && ctx.tab.projectPath === ctx.projectPath
+          && ctx.tab.logType === ctx.logType) {
+        ctx.tab.files = files.slice();
+        ctx.tab.lastFilesRefreshAtEpochMs = Date.now();
+        const matched = preferredFile ? files.find((f) => f.fileName === preferredFile) : null;
+        if (matched) {
+          ctx.tab.currentFile = matched.fileName;
+          ctx.tab.currentFileMeta = matched;
+        }
+        renderLogTabs();
+      }
+      return { applied: false, files };
+    }
+    state.files = files;
     state.lastFilesRefreshAtEpochMs = Date.now();
     if (preferredFile) {
       const matched = state.files.find((f) => f.fileName === preferredFile);
@@ -2224,6 +2440,7 @@
       setStatus(`文件已加载（${state.files.length}）`);
     }
     syncStateToActiveTab();
+    return { applied: true, files: state.files };
   }
 
   async function autoRefreshFilesFromSelect() {
@@ -2310,14 +2527,18 @@
       }
       return;
     }
+    clearTabReconnectTimer(tab);
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws/logs`);
     tab.ws = ws;
+    tab.wsClosing = false;
     if (tab.id === state.activeTabId) {
       state.ws = ws;
     }
     ws.onopen = () => {
+      if (tab.ws !== ws) return;
       tab.wsConnected = true;
+      tab.wsReconnectAttempts = 0;
       tab.pausedByIdle = false;
       if (tab.id === state.activeTabId) {
         state.wsConnected = true;
@@ -2325,17 +2546,28 @@
       setTabStatus(tab, "WebSocket 已连接");
     };
     ws.onclose = () => {
+      const expectedClose = !!tab.wsClosing;
+      if (tab.ws === ws) {
+        tab.ws = null;
+      }
+      tab.wsClosing = false;
       tab.wsConnected = false;
       if (tab.id === state.activeTabId) {
+        if (state.ws === ws) {
+          state.ws = null;
+        }
         state.wsConnected = false;
       }
-      if (!tab.pausedByIdle) {
+      if (!expectedClose && tab.realtimeWanted && !tab.pausedByIdle) {
+        scheduleTabReconnect(tab);
+      } else if (!tab.pausedByIdle) {
         setTabStatus(tab, "WebSocket 已断开", "error");
       } else {
         renderLogTabs();
       }
     };
     ws.onerror = () => {
+      if (tab.ws !== ws) return;
       setTabStatus(tab, "WebSocket 错误", "error");
     };
     ws.onmessage = (ev) => handleWsMessage(ev.data, tab);
@@ -2343,15 +2575,21 @@
 
   function wsSend(payload, tab = getActiveTab()) {
     if (!tab) return;
+    if (payload && (payload.type === "open_stream" || payload.type === "switch_file")) {
+      tab.lastOpenStreamPayload = { ...payload };
+    }
     ensureWebSocket(tab);
     const ws = tab.ws;
     if (!ws) return;
-    const sendNow = () => ws.send(JSON.stringify(payload));
+    const sendNow = () => {
+      if (tab.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify(payload));
+    };
     if (ws.readyState === WebSocket.OPEN) {
       sendNow();
     } else {
       const retry = setInterval(() => {
-        if (!tab.ws) {
+        if (!tab.ws || tab.ws !== ws) {
           clearInterval(retry);
           return;
         }
@@ -2385,6 +2623,7 @@
       if (msg.status === "following") {
         tab.realtimeWanted = true;
         tab.pausedByIdle = false;
+        tab.currentStreamId = msg.streamId || tab.currentStreamId || null;
       }
       if (msg.fileName) {
         tab.currentFile = msg.fileName;
@@ -2398,19 +2637,20 @@
       return;
     }
     if (msg.type === "file_switched") {
-      const shouldFollow = state.autoFollow;
-      appendTextToTabBuffer(tab, `\n[system] 已切换文件: ${msg.fromFile} -> ${msg.toFile}\n`);
+      if (msg.streamId && tab.currentStreamId && msg.streamId !== tab.currentStreamId) {
+        return;
+      }
+      const shouldFollow = tab.id === state.activeTabId ? state.autoFollow : tab.autoFollow !== false;
+      const trimmed = appendTextToTabBuffer(tab, `\n[system] 已切换文件: ${msg.fromFile} -> ${msg.toFile}\n`);
       tab.currentFile = msg.toFile || tab.currentFile;
       tab.lastRealtimeMode = "latest";
       if (tab.id === state.activeTabId) {
         state.currentFile = tab.currentFile;
         els.currentFileLabel.textContent = tab.currentFile || "-";
         state.logBuffer = tab.logBuffer || "";
-        renderLogBuffer();
+        scheduleLogBufferRender(trimmed, shouldFollow);
         renderSearchStatus();
-        if (shouldFollow) {
-          scrollToBottom();
-        } else {
+        if (!shouldFollow) {
           state.lastViewerScrollTop = els.logViewer.scrollTop;
           els.backToBottomBtn.hidden = false;
           syncStateToActiveTab();
@@ -2423,26 +2663,27 @@
       return;
     }
     if (msg.type === "log_lines") {
+      if (msg.streamId && tab.currentStreamId && msg.streamId !== tab.currentStreamId) {
+        return;
+      }
       if (msg.fileName) {
         tab.currentFile = msg.fileName;
       }
-      const shouldFollow = state.autoFollow;
+      const shouldFollow = tab.id === state.activeTabId ? state.autoFollow : tab.autoFollow !== false;
       const text = (msg.lines || []).join("\n") + ((msg.lines || []).length ? "\n" : "");
-      appendTextToTabBuffer(tab, text);
+      const trimmed = appendTextToTabBuffer(tab, text);
       if (tab.id === state.activeTabId) {
         state.currentFile = tab.currentFile || state.currentFile;
         if (msg.fileName) els.currentFileLabel.textContent = msg.fileName;
         state.logBuffer = tab.logBuffer || "";
-        renderLogBuffer();
+        scheduleLogBufferRender(trimmed, shouldFollow);
         renderSearchStatus();
-        if (shouldFollow) {
-          scrollToBottom();
-        } else {
+        if (!shouldFollow) {
           state.lastViewerScrollTop = els.logViewer.scrollTop;
           els.backToBottomBtn.hidden = false;
           syncStateToActiveTab();
         }
-        syncStateToActiveTab();
+        tab.autoFollow = shouldFollow;
       } else {
         renderLogTabs();
       }
@@ -2452,12 +2693,16 @@
 
   async function openLatestRealtime() {
     const tab = getActiveTab();
+    const ctx = captureActiveTabContext(tab);
     if (!state.projectPath) {
       notify("请先选择项目", "warn");
       return;
     }
     if (!state.files.length) {
-      await loadFiles();
+      await loadFiles({ tab });
+      if (ctx && !isActiveTabContext(ctx)) {
+        return;
+      }
       if (!state.files.length) {
         notify("当前日志类型没有匹配文件", "warn");
         return;
@@ -2512,6 +2757,7 @@
 
   async function openFile(fileName, latestMode) {
     const tab = getActiveTab();
+    const ctx = captureActiveTabContext(tab);
     const previousScrollLeft = els.logViewer ? els.logViewer.scrollLeft : 0;
     const realtimeFilter = getAppliedRealtimeFilterOptions();
     state.focusLineText = "";
@@ -2520,10 +2766,13 @@
     state.currentFile = fileName;
     els.currentFileLabel.textContent = fileName;
     let tailText = "";
+    let nextFileSize = 0;
+    let nextStartOffset = 0;
+    let nextEndOffset = 0;
     if (realtimeFilter) {
       const qs = new URLSearchParams({
-        serverId: state.serverId,
-        projectPath: state.projectPath,
+        serverId: ctx ? ctx.serverId : state.serverId,
+        projectPath: ctx ? ctx.projectPath : state.projectPath,
         file: fileName,
         lines: "200",
         keyword: realtimeFilter.keyword,
@@ -2531,23 +2780,40 @@
         contextLines: String(realtimeFilter.contextLines)
       });
       const snapshot = await api(`/api/logs/content/tail-lines?${qs.toString()}`);
-      state.fileSize = 0;
-      state.startOffset = 0;
-      state.endOffset = 0;
       tailText = (snapshot && typeof snapshot.text === "string") ? snapshot.text : "";
     } else {
       const qs = new URLSearchParams({
-        serverId: state.serverId,
-        projectPath: state.projectPath,
+        serverId: ctx ? ctx.serverId : state.serverId,
+        projectPath: ctx ? ctx.projectPath : state.projectPath,
         file: fileName,
         tailBytes: "65536"
       });
       const chunk = await api(`/api/logs/content/tail?${qs.toString()}`);
-      state.fileSize = (chunk && chunk.fileSize) || 0;
-      state.startOffset = (chunk && chunk.startOffset) || 0;
-      state.endOffset = (chunk && chunk.endOffset) || 0;
+      nextFileSize = (chunk && chunk.fileSize) || 0;
+      nextStartOffset = (chunk && chunk.startOffset) || 0;
+      nextEndOffset = (chunk && chunk.endOffset) || 0;
       tailText = (chunk && typeof chunk.text === "string") ? chunk.text : "";
     }
+    if (ctx && !isActiveTabContext(ctx)) {
+      if (isTabStillPresent(ctx.tab)
+          && ctx.tab.serverId === ctx.serverId
+          && ctx.tab.projectPath === ctx.projectPath
+          && ctx.tab.logType === ctx.logType) {
+        ctx.tab.currentFile = fileName;
+        ctx.tab.logBuffer = tailText || "";
+        ctx.tab.fileSize = nextFileSize;
+        ctx.tab.startOffset = nextStartOffset;
+        ctx.tab.endOffset = nextEndOffset;
+        ctx.tab.realtimeWanted = false;
+        ctx.tab.pausedByIdle = false;
+        ctx.tab.title = buildTabTitle(ctx.tab);
+        renderLogTabs();
+      }
+      return;
+    }
+    state.fileSize = nextFileSize;
+    state.startOffset = nextStartOffset;
+    state.endOffset = nextEndOffset;
     setLogText(tailText);
     if (!tailText) {
       if (realtimeFilter) {
@@ -2592,18 +2858,28 @@
   async function loadPrevChunk() {
     if (!state.projectPath || !state.currentFile || state.loadingPrev) return;
     if (state.startOffset <= 0) return;
+    const tab = getActiveTab();
+    const ctx = captureActiveTabContext(tab);
+    const requestFile = state.currentFile;
+    const requestStartOffset = state.startOffset;
     state.loadingPrev = true;
     try {
       const prevHeight = els.logViewer.scrollHeight;
       const prevTop = els.logViewer.scrollTop;
       const qs = new URLSearchParams({
-        serverId: state.serverId,
-        projectPath: state.projectPath,
-        file: state.currentFile,
-        beforeOffset: String(state.startOffset),
+        serverId: ctx ? ctx.serverId : state.serverId,
+        projectPath: ctx ? ctx.projectPath : state.projectPath,
+        file: requestFile,
+        beforeOffset: String(requestStartOffset),
         maxBytes: "65536"
       });
       const chunk = await api(`/api/logs/content/prev?${qs.toString()}`);
+      if (ctx && !isActiveTabContext(ctx)) {
+        if (isTabStillPresent(ctx.tab)) {
+          ctx.tab.loadingPrev = false;
+        }
+        return;
+      }
       state.fileSize = chunk.fileSize || state.fileSize;
       state.startOffset = chunk.startOffset || 0;
       prependLogText(chunk.text || "");
@@ -2613,8 +2889,10 @@
     } catch (e) {
       console.error(e);
     } finally {
-      state.loadingPrev = false;
-      syncStateToActiveTab();
+      if (!ctx || isActiveTabContext(ctx)) {
+        state.loadingPrev = false;
+        syncStateToActiveTab();
+      }
     }
   }
 
@@ -2665,6 +2943,13 @@
       notify("请先选择项目", "warn");
       return;
     }
+    const tab = getActiveTab();
+    const ctx = captureActiveTabContext(tab);
+    const requestId = tab ? (Number(tab.activeSearchRequestId || 0) + 1) : (state.activeSearchRequestId + 1);
+    if (tab) {
+      tab.activeSearchRequestId = requestId;
+    }
+    state.activeSearchRequestId = requestId;
     if (!state.currentFileMeta && state.files.length) state.currentFileMeta = state.files[0];
     const keyword = getSearchKeywordText();
     const timeRange = resolveSearchDateRange();
@@ -2674,25 +2959,8 @@
     }
     const scope = els.searchScope.value;
     if (scope === "all") {
-      const now = Date.now();
-      const pending = state.pendingAllSearchConfirm;
-      const confirmed = pending
-        && pending.projectPath === state.projectPath
-        && pending.keyword === keyword
-        && pending.logType === state.logType
-        && now - pending.ts < 8000;
-      if (!confirmed) {
-        state.pendingAllSearchConfirm = {
-          projectPath: state.projectPath,
-          keyword,
-          logType: state.logType,
-          ts: now
-        };
-        showSearchConfirmHint("全部日志搜索会增加读取压力，请再次点击搜索图标确认");
-        return;
-      }
       state.pendingAllSearchConfirm = null;
-      clearSearchConfirmHint();
+      showSearchConfirmHint("正在搜索全部文件，系统会按文件数、扫描字节和命中数自动截断。");
     } else {
       state.pendingAllSearchConfirm = null;
       clearSearchConfirmHint();
@@ -2701,9 +2969,9 @@
     const fileMeta = state.files.find((f) => f.fileName === file) || state.currentFileMeta;
     const caseSensitive = !!(els.caseSensitive && els.caseSensitive.checked);
     const body = {
-      serverId: state.serverId,
-      projectPath: state.projectPath,
-      logType: state.logType,
+      serverId: ctx ? ctx.serverId : state.serverId,
+      projectPath: ctx ? ctx.projectPath : state.projectPath,
+      logType: ctx ? ctx.logType : state.logType,
       keyword,
       scope,
       date: fileMeta ? fileMeta.date : undefined,
@@ -2726,6 +2994,15 @@
       method: "POST",
       body: JSON.stringify(body)
     });
+    if ((ctx && !isActiveTabContext(ctx)) || (tab && tab.activeSearchRequestId !== requestId)) {
+      if (isTabStillPresent(tab) && tab.activeSearchRequestId === requestId) {
+        tab.searchHits = (resp.hits || []).map((hit) => normalizeSearchHit(hit, "history"));
+        tab.searchCollapsedGroups = {};
+        tab.lastHistorySearchSummary = `${keyword ? "历史命中" : "时间范围定位"} ${tab.searchHits.length} 条 | 扫描文件 ${resp.scannedFiles} | 扫描字节 ${formatBytes(resp.scannedBytes || 0)}${resp.partial ? " | 结果已截断" : ""}`;
+        renderLogTabs();
+      }
+      return;
+    }
     state.searchHits = (resp.hits || []).map((hit) => normalizeSearchHit(hit, "history"));
     state.searchCollapsedGroups = {};
     state.lastHistorySearchSummary = `${keyword ? "历史命中" : "时间范围定位"} ${state.searchHits.length} 条 | 扫描文件 ${resp.scannedFiles} | 扫描字节 ${formatBytes(resp.scannedBytes || 0)}${resp.partial ? " | 结果已截断" : ""}`;
@@ -2733,6 +3010,14 @@
     renderSearchResults(keyword);
     updateSearchGroupToolButtons();
     updateSearchNavigationUI();
+    saveSearchHistoryEntry({
+      keyword,
+      scope,
+      logType: state.logType,
+      caseSensitive,
+      startTime: timeRange ? timeRange.startTime : "",
+      endTime: timeRange ? timeRange.endTime : ""
+    });
     syncStateToActiveTab();
     if (((scope === "currentFile") || (!keyword && !!timeRange)) && state.searchHits.length > 0) {
       await openSearchHit(0, "history");
@@ -2928,6 +3213,7 @@
   async function openFileTailStatic(fileName) {
     if (!state.projectPath || !fileName) return;
     const tab = getActiveTab();
+    const ctx = captureActiveTabContext(tab);
     const previousScrollLeft = els.logViewer ? els.logViewer.scrollLeft : 0;
     closeRealtimeStream(true);
     state.currentFile = fileName;
@@ -2939,6 +3225,9 @@
       tailBytes: "65536"
     });
     const chunk = await api(`/api/logs/content/tail?${qs.toString()}`);
+    if (ctx && !isActiveTabContext(ctx)) {
+      return;
+    }
     state.fileSize = (chunk && chunk.fileSize) || 0;
     state.startOffset = (chunk && chunk.startOffset) || 0;
     state.endOffset = (chunk && chunk.endOffset) || 0;
@@ -2969,6 +3258,7 @@
     if (!state.projectPath || !fileName) return;
     const targetOffset = Number(offset || 0);
     const tab = getActiveTab();
+    const ctx = captureActiveTabContext(tab);
     const previousScrollLeft = els.logViewer ? els.logViewer.scrollLeft : 0;
     closeRealtimeStream(true);
     state.currentFile = fileName;
@@ -2995,6 +3285,9 @@
       maxBytes: "65536"
     });
     const chunk = await api(`/api/logs/content/chunk?${qs.toString()}`);
+    if (ctx && !isActiveTabContext(ctx)) {
+      return;
+    }
     state.fileSize = (chunk && chunk.fileSize) || 0;
     state.startOffset = (chunk && chunk.startOffset) || fromOffset;
     state.endOffset = (chunk && chunk.endOffset) || fromOffset;
@@ -3043,7 +3336,40 @@
 
   function renderLogBuffer() {
     els.logContent.innerHTML = formatLogBufferHtml(state.logBuffer);
+    state.renderedLogBuffer = state.logBuffer || "";
     state.lastViewerScrollTop = els.logViewer.scrollTop;
+  }
+
+  function scheduleLogBufferRender(force = false, followAfterRender = false) {
+    state.pendingForceLogRender = !!(state.pendingForceLogRender || force);
+    state.pendingFollowAfterRender = !!(state.pendingFollowAfterRender || followAfterRender);
+    if (state.pendingLogRender) return;
+    state.pendingLogRender = requestAnimationFrame(() => {
+      state.pendingLogRender = null;
+      const current = state.logBuffer || "";
+      const rendered = state.renderedLogBuffer || "";
+      const canAppend = !state.pendingForceLogRender
+        && !state.focusLineText
+        && rendered
+        && current.startsWith(rendered);
+      if (canAppend) {
+        const delta = current.slice(rendered.length);
+        if (delta) {
+          els.logContent.insertAdjacentHTML("beforeend", formatLogBufferHtml(delta));
+        }
+        state.renderedLogBuffer = current;
+      } else {
+        renderLogBuffer();
+      }
+      const shouldFollow = state.pendingFollowAfterRender;
+      state.pendingForceLogRender = false;
+      state.pendingFollowAfterRender = false;
+      if (shouldFollow) {
+        scrollToBottom();
+      } else {
+        state.lastViewerScrollTop = els.logViewer.scrollTop;
+      }
+    });
   }
 
   function isViewerNearBottom(tolerance = 4) {
@@ -3441,6 +3767,19 @@
         });
       });
     }
+    if (els.searchRecentSelect) {
+      els.searchRecentSelect.addEventListener("change", () => {
+        applySearchHistoryEntry(els.searchRecentSelect.value);
+        els.searchRecentSelect.value = "";
+      });
+    }
+    if (Array.isArray(els.searchTimePresetButtons)) {
+      els.searchTimePresetButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          applySearchTimePreset(btn.dataset.searchTimePreset || "15m");
+        });
+      });
+    }
     if (els.searchKeyword) {
       els.searchKeyword.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -3506,17 +3845,8 @@
     }
     els.backToBottomBtn.addEventListener("click", scrollToBottom);
     els.logViewer.addEventListener("scroll", onLogScroll);
-    window.addEventListener("beforeunload", () => {
-      for (const tab of state.tabs) {
-        if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
-          try {
-            tab.ws.send(JSON.stringify({ type: "close_stream" }));
-          } catch (e) {
-            console.warn(e);
-          }
-        }
-      }
-    });
+    window.addEventListener("beforeunload", () => shutdownAllRealtimeSockets(false));
+    window.addEventListener("pagehide", () => shutdownAllRealtimeSockets(false));
   }
 
   async function reloadConfigEditor() {
@@ -3597,6 +3927,7 @@
     applyLogFontSize(loadLogFontSizePreference());
     syncSearchScopeButtons();
     syncSearchPresetButtons();
+    renderSearchHistorySelect();
     updateSearchNavigationUI();
     updateSearchGroupToolButtons();
     updateActionAvailability();

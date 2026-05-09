@@ -10,6 +10,7 @@ import com.example.logviewer.logs.domain.ProjectNode;
 import com.example.logviewer.logs.domain.SearchHit;
 import com.example.logviewer.logs.domain.SearchScope;
 import com.example.logviewer.logs.infrastructure.PathGuard;
+import com.example.logviewer.logs.infrastructure.LogPathExpression;
 import com.example.logviewer.logs.infrastructure.RealtimeGrepCommandBuilder;
 import com.example.logviewer.logs.infrastructure.RemoteCommandResult;
 import com.example.logviewer.logs.infrastructure.RemoteLogClient;
@@ -30,7 +31,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -60,6 +63,9 @@ public class RemoteCommandLogService {
     }
 
     public List<ProjectNode> listProjects(ServerConfig server) {
+        if (LogPathExpression.hasWildcard(server.getRootPath())) {
+            return listProjectsByExpression(server);
+        }
         String root = pathGuard.normalize(server.getRootPath());
         // Only scan project paths that actually contain logs, and avoid shell globs
         // (some login shells may disable glob expansion via `set -f` / `noglob`).
@@ -103,6 +109,38 @@ public class RemoteCommandLogService {
             n.setHasLogs("1".equals(arr[2]));
             list.add(n);
         }
+        list.sort(Comparator.comparing(ProjectNode::getL1Name).thenComparing(ProjectNode::getProjectName));
+        return list;
+    }
+
+    private List<ProjectNode> listProjectsByExpression(ServerConfig server) {
+        String pattern = LogPathExpression.normalizePattern(server.getRootPath());
+        String root = pathGuard.normalizeRootBase(server.getRootPath());
+        String cmd = "root=" + ShellQuoter.sq(root) + "\n"
+                + "[ -d \"$root\" ] || exit 0\n"
+                + "find -L \"$root\" -type f -path '*/logs/*' -name '*.log' -printf '%p\\n' 2>/dev/null | sort -u | head -n 20000\n";
+        RemoteCommandResult result = remoteLogClient.exec(server, cmd, 20000L);
+        if (!result.success()) {
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "REMOTE_SCAN_FAILED", trimErr(result));
+        }
+        Map<String, ProjectNode> byProject = new LinkedHashMap<String, ProjectNode>();
+        for (String line : splitLines(result.stdout())) {
+            if (isBlank(line) || !LogPathExpression.matchesLogFile(pattern, line)) {
+                continue;
+            }
+            String projectPath = LogPathExpression.projectPathFromLogFile(line);
+            if (isBlank(projectPath) || byProject.containsKey(projectPath)) {
+                continue;
+            }
+            ProjectNode node = new ProjectNode();
+            node.setL1Name(LogPathExpression.groupName(projectPath));
+            node.setProjectName(LogPathExpression.projectName(projectPath));
+            node.setProjectPath(projectPath);
+            node.setLogsPath(projectPath + "/logs");
+            node.setHasLogs(true);
+            byProject.put(projectPath, node);
+        }
+        List<ProjectNode> list = new ArrayList<ProjectNode>(byProject.values());
         list.sort(Comparator.comparing(ProjectNode::getL1Name).thenComparing(ProjectNode::getProjectName));
         return list;
     }

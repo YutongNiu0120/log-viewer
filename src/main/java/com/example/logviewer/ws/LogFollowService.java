@@ -209,12 +209,14 @@ public class LogFollowService {
             }
         }
         BufferedReader reader = null;
+        boolean shouldRestart = false;
         try {
             reader = new BufferedReader(new InputStreamReader(handle.stdout(), StandardCharsets.UTF_8));
             List<String> buffer = new ArrayList<String>(128);
             while (!active.closed && active.ws.isOpen() && generation == active.tailGeneration) {
                 String line = reader.readLine();
                 if (line == null) {
+                    shouldRestart = true;
                     break;
                 }
                 buffer.addAll(active.realtimeFilter.accept(line));
@@ -229,6 +231,7 @@ public class LogFollowService {
             if (!active.closed && generation == active.tailGeneration) {
                 log.warn("tail read loop error for stream {}", active.streamId, e);
                 sendStatus(active.ws, "reconnecting", map("message", e.getMessage()));
+                shouldRestart = true;
             }
         } finally {
             if (reader != null) {
@@ -239,6 +242,29 @@ public class LogFollowService {
                 }
             }
         }
+        if (shouldRestart && !active.closed && active.ws.isOpen() && generation == active.tailGeneration) {
+            scheduleTailRestart(active, generation);
+        }
+    }
+
+    private void scheduleTailRestart(final ActiveStream active, final long failedGeneration) {
+        scheduler.schedule(new Runnable() {
+            @Override
+            public void run() {
+                if (active.closed || !active.ws.isOpen() || failedGeneration != active.tailGeneration) {
+                    return;
+                }
+                sendStatus(active.ws, "reconnecting", map("message", "tail stream ended"));
+                try {
+                    startTail(active, false);
+                } catch (Exception e) {
+                    log.warn("tail restart failed for stream {}", active.streamId, e);
+                    if (!active.closed && active.ws.isOpen() && failedGeneration == active.tailGeneration) {
+                        scheduleTailRestart(active, failedGeneration);
+                    }
+                }
+            }
+        }, 1000L, TimeUnit.MILLISECONDS);
     }
 
     private void scheduleRotationCheck(final ActiveStream active) {

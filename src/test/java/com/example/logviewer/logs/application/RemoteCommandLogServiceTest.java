@@ -78,6 +78,26 @@ class RemoteCommandLogServiceTest {
                 .contains("grep --line-buffered -i -C 1 --no-group-separator -F -- 'ERROR' || true");
     }
 
+    @Test
+    void shouldListProjectsFromWildcardLogPathExpression() {
+        ServerConfig server = new ServerConfig();
+        server.setRootPath("/home/devops/deploy/**/logs/*");
+        remoteLogClient.stdout = "/home/devops/deploy/backend/onedata/lot-manager-app/logs/lot-manager-app.20260429.0.log\n"
+                + "/home/devops/deploy/backend/onedata/lot-manager-app/logs/lot-manager-app.error.20260429.0.log\n"
+                + "/home/devops/deploy/backend/nacos/target/logs/target.20260429.0.log\n";
+
+        java.util.List<com.example.logviewer.logs.domain.ProjectNode> projects = service.listProjects(server);
+
+        assertThat(projects).hasSize(2);
+        assertThat(projects)
+                .anySatisfy(project -> {
+                    assertThat(project.getL1Name()).isEqualTo("onedata");
+                    assertThat(project.getProjectName()).isEqualTo("lot-manager-app");
+                    assertThat(project.getProjectPath()).isEqualTo("/home/devops/deploy/backend/onedata/lot-manager-app");
+                });
+        assertThat(remoteLogClient.lastShellCommand).contains("find -L \"$root\" -type f -path '*/logs/*' -name '*.log'");
+    }
+
     private static class RecordingRemoteLogClient implements RemoteLogClient {
         private String lastShellCommand;
         private String stdout = "";

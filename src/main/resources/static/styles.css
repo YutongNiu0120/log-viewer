@@ -1805,7 +1805,7 @@ body.resizing-sidebar {
 
 .filter-drawer input,
 .filter-drawer select,
-.filter-drawer button:not(.search-preset-btn):not(.search-mode-tab):not(.search-scope-option) {
+.filter-drawer button:not(.search-preset-btn):not(.search-time-preset-btn):not(.search-mode-tab):not(.search-scope-option) {
   height: 40px;
   border-radius: 6px;
   border-color: #dcdfe6;
@@ -2051,7 +2051,14 @@ body.resizing-sidebar {
   align-items: center;
 }
 
-.search-preset-btn {
+.search-time-presets {
+  gap: 8px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.search-preset-btn,
+.search-time-preset-btn {
   height: 26px;
   padding: 0 10px;
   border-radius: 999px;
@@ -2061,13 +2068,15 @@ body.resizing-sidebar {
   font-weight: 500;
 }
 
-.search-preset-btn:hover {
+.search-preset-btn:hover,
+.search-time-preset-btn:hover {
   background: #edf2f7;
   border-color: #dcdfe6;
   color: #475467;
 }
 
-.search-preset-btn.active {
+.search-preset-btn.active,
+.search-time-preset-btn.active {
   background: #edf2f7;
   border-color: #dcdfe6;
   color: #344054;
